@@ -153,4 +153,18 @@ describe('Bot', () => {
     expect(intro.text.split(/\s+/).length).toBeLessThanOrEqual(100);
     expect(intro.mentionUserIds).toEqual([]);
   });
+
+  it('deactivates a group when the bot is removed, so its reminders are skipped not failed', async () => {
+    parser.queue.push(meeting);
+    await env.adapter.receive(message({ text: 'meeting...' }));
+    const bot = makeBot(env, parser);
+    await bot.handleRemovedFromGroup('group-1');
+    const due = await env.handle.pool.query('select id, fire_at from occurrences order by fire_at limit 1');
+    env.clock.set(due.rows[0].fire_at);
+    expect(await env.dispatcher.dispatch(due.rows[0].id)).toBe('skipped');
+    // Re-adding the bot reactivates the group and posts the intro again.
+    await bot.handleAddedToGroup('group-1');
+    const { rows } = await env.handle.pool.query("select active from groups where platform_group_id = 'group-1'");
+    expect(rows[0].active).toBe(true);
+  });
 });

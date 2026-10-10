@@ -18,7 +18,8 @@ import { Scheduler } from './scheduler/scheduler.js';
 export interface AppOptions {
   config: Config;
   logger: Logger;
-  adapter: ChatAdapter;
+  /** The chat adapter, or a factory for adapters that need the database (WhatsApp auth state). */
+  adapter: ChatAdapter | ((handle: DbHandle) => ChatAdapter);
   clock?: Clock;
   /** "pgboss" for production; "manual" when time is simulated (sweeper-only delivery). */
   queueMode?: 'pgboss' | 'manual';
@@ -31,6 +32,7 @@ export interface AppOptions {
 
 export interface App {
   handle: DbHandle;
+  adapter: ChatAdapter;
   clock: Clock;
   scheduler: Scheduler;
   dispatcher: Dispatcher;
@@ -43,10 +45,11 @@ export interface App {
 
 /** Composition root: wires the database, scheduler, dispatcher and services around an adapter. */
 export async function createApp(opts: AppOptions): Promise<App> {
-  const { config, logger, adapter } = opts;
+  const { config, logger } = opts;
   const clock = opts.clock ?? systemClock;
   const handle = createDb(config.DATABASE_URL);
   await runMigrations(handle.db);
+  const adapter = typeof opts.adapter === 'function' ? opts.adapter(handle) : opts.adapter;
 
   const pgboss = opts.queueMode === 'manual' ? undefined : new PgBossQueue(config.DATABASE_URL, logger);
   const queue: JobQueue = pgboss ?? new ManualQueue();
@@ -73,6 +76,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
 
   return {
     handle,
+    adapter,
     clock,
     scheduler,
     dispatcher,
@@ -91,6 +95,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     async stop() {
       recovery.stopSweeper();
       await pgboss?.stop();
+      await adapter.stop?.();
       await handle.close();
     },
   };

@@ -70,6 +70,18 @@ export class Bot {
   attach(): void {
     this.adapter.onMessage((msg) => this.handleMessage(msg));
     this.adapter.onBotAddedToGroup((groupId) => this.handleAddedToGroup(groupId));
+    this.adapter.onBotRemovedFromGroup?.((groupId) => this.handleRemovedFromGroup(groupId));
+  }
+
+  /** Marks the group inactive so its reminders are skipped instead of failing to send. */
+  async handleRemovedFromGroup(platformGroupId: string): Promise<void> {
+    const { group } = await upsertGroup(this.db, {
+      platform: this.opts.platform,
+      platformGroupId,
+      defaultTimezone: this.opts.defaultTimezone,
+    });
+    await updateGroup(this.db, group.id, { active: false });
+    this.logger.info({ groupId: group.id }, 'Bot removed from group; group deactivated');
   }
 
   async handleAddedToGroup(platformGroupId: string): Promise<void> {

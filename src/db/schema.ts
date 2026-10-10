@@ -130,3 +130,23 @@ export type Reminder = typeof reminders.$inferSelect;
 export type NewReminder = typeof reminders.$inferInsert;
 export type Occurrence = typeof occurrences.$inferSelect;
 export type PendingInteraction = typeof pendingInteractions.$inferSelect;
+
+// ---------------------------------------------------------------- WhatsApp (Baileys) auth state
+// Values are JSON produced with Baileys' BufferJSON replacer, stored as text.
+
+export const waAuthCreds = pgTable('wa_auth_creds', {
+  session: text('session').primaryKey(),
+  creds: text('creds').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`now()`),
+});
+
+export const waAuthKeys = pgTable(
+  'wa_auth_keys',
+  {
+    session: text('session').notNull(),
+    type: text('type').notNull(),
+    keyId: text('key_id').notNull(),
+    value: text('value').notNull(),
+  },
+  (t) => [uniqueIndex('wa_auth_keys_pk').on(t.session, t.type, t.keyId)],
+);

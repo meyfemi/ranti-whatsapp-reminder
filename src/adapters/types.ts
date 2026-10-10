@@ -46,6 +46,8 @@ export interface ChatAdapter {
   stop?(): Promise<void>;
   onMessage(handler: (msg: IncomingMessage) => Promise<void>): void;
   onBotAddedToGroup(handler: (groupId: string) => Promise<void>): void;
+  /** Optional: the bot was removed from a group (its reminders stop firing there). */
+  onBotRemovedFromGroup?(handler: (groupId: string) => Promise<void>): void;
   sendText(groupId: string, text: string, mentionUserIds?: string[]): Promise<void>;
   getGroupMembers(groupId: string): Promise<Member[]>;
   /**

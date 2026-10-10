@@ -8,6 +8,13 @@
       "when": 1791591804257,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791592816563,
+      "tag": "0001_whatsapp_auth",
+      "breakpoints": true
     }
   ]
 }

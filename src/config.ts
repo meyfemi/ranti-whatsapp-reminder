@@ -27,6 +27,8 @@ const ConfigSchema = z.object({
   }),
   RATE_LIMIT_GLOBAL_PER_MINUTE: z.coerce.number().int().positive().default(20),
   RATE_LIMIT_GROUP_PER_MINUTE: z.coerce.number().int().positive().default(6),
+  /** Max bot-directed messages handled per group per minute; extra ones are dropped (cost/abuse guard). */
+  INBOUND_PER_GROUP_PER_MINUTE: z.coerce.number().int().positive().default(10),
   REPLY_DELAY_MIN_MS: z.coerce.number().int().nonnegative().default(1000),
   REPLY_DELAY_MAX_MS: z.coerce.number().int().nonnegative().default(4000),
   ALERT_WEBHOOK_URL: optionalString.pipe(z.url().optional()),
