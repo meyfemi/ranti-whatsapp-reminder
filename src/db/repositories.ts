@@ -189,12 +189,24 @@ export async function updateReminder(
 
 // ---------------------------------------------------------------- occurrences
 
-/** Inserts a pending occurrence; returns undefined if it already exists. */
+/**
+ * Inserts a pending occurrence. If the same (reminder, fire time, offset) exists and was skipped
+ * (e.g. an edit was undone), it is revived. Returns undefined if it already exists as pending,
+ * sent or failed, so nothing that was already posted can be posted again.
+ */
 export async function insertOccurrence(
   db: DbOrTx,
   values: { reminderId: number; offsetMinutes: number; fireAt: Date },
 ): Promise<Occurrence | undefined> {
-  const [o] = await db.insert(occurrences).values(values).onConflictDoNothing().returning();
+  const [o] = await db
+    .insert(occurrences)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [occurrences.reminderId, occurrences.fireAt, occurrences.offsetMinutes],
+      set: { status: 'pending', attempts: 0, lastError: null, sentAt: null },
+      setWhere: sql`${occurrences.status} = 'skipped'`,
+    })
+    .returning();
   return o;
 }
 

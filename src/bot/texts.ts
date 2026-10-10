@@ -68,3 +68,15 @@ export function cancelledConfirmation(r: Pick<Reminder, 'title' | 'shortId'>): s
 }
 
 export const UNAVAILABLE_TEXT = "Sorry, I can't process requests right now. Please try again in a few minutes.";
+
+export function listText(items: { reminder: Reminder; nextEvent: Date | null }[], botName: string): string {
+  if (items.length === 0) {
+    return `No active reminders yet. Try "@${botName} remind us about the meeting on Sunday at 11am".`;
+  }
+  const lines = items.map(({ reminder: r, nextEvent }) => {
+    const when = describeWhen({ ...r, startLocal: toIsoLocal(r.startLocal) });
+    const next = r.rrule && nextEvent ? ` · next ${formatDay(DateTime.fromJSDate(nextEvent).setZone(r.timezone))}` : '';
+    return `#${r.shortId} ${sanitizeText(r.title)}: ${when}${next}`;
+  });
+  return [`📋 Reminders (${items.length}):`, ...lines, `Cancel with "@${botName} cancel #<number>".`].join('\n');
+}

@@ -199,3 +199,20 @@ describe('Recovery', () => {
     expect(env.adapter.sent.map((s) => s.text)).toEqual(['⏰ Reminder: General meeting starts in 5 minutes (11:00).']);
   });
 });
+
+describe('occurrence revival', () => {
+  it('revives a skipped occurrence but never a sent one', async () => {
+    const { reminder, occurrences: occ } = await createMeeting();
+    const o = occ.find((x) => x.offsetMinutes === 0)!;
+    await env.scheduler.cancel(env.handle.db, reminder.id);
+    const revived = await env.scheduler.scheduleInitial(env.handle.db, reminder);
+    expect(revived.map((r) => r.id).sort()).toEqual(occ.map((r) => r.id).sort());
+
+    env.clock.set(o.fireAt);
+    expect(await env.dispatcher.dispatch(o.id)).toBe('sent');
+    env.clock.set(new Date(o.fireAt.getTime() - 60 * 60_000)); // pretend we're before it again
+    const again = await env.scheduler.scheduleInitial(env.handle.db, reminder);
+    expect(again.find((r) => r.id === o.id)).toBeUndefined();
+    expect(env.adapter.sent).toHaveLength(1);
+  });
+});

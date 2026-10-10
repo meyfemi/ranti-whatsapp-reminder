@@ -10,16 +10,27 @@ import {
   upsertGroup,
   upsertMember,
 } from '../db/repositories.js';
-import type { Group, MemberRow, PendingInteraction } from '../db/schema.js';
+import type { Group, MemberRow, PendingInteraction, Reminder } from '../db/schema.js';
 import type { Logger } from '../logger.js';
-import type { ParsedCommand } from '../parser/schema.js';
+import type { ParsedCommand, ReminderTarget } from '../parser/schema.js';
 import { ParserUnavailableError, type Parser, type ParserMentionedUser } from '../parser/types.js';
-import { describeWhen, sanitizeText } from '../reminders/format.js';
-import type { ReminderService } from '../reminders/service.js';
+import { describeWhen, formatDay, sanitizeText, tzAbbrev } from '../reminders/format.js';
+import { resolveTarget } from '../reminders/target.js';
+import type { ReminderChanges, ReminderService, ReminderSnapshot } from '../reminders/service.js';
 import type { ActorContext } from '../reminders/types.js';
 import type { Clock } from '../scheduler/clock.js';
 import { toIsoLocal } from '../scheduler/scheduler.js';
-import { createdConfirmation, helpText, introText, UNAVAILABLE_TEXT, UNDO_MINUTES } from './texts.js';
+import { DateTime } from 'luxon';
+import {
+  cancelledConfirmation,
+  createdConfirmation,
+  editedConfirmation,
+  helpText,
+  introText,
+  listText,
+  UNAVAILABLE_TEXT,
+  UNDO_MINUTES,
+} from './texts.js';
 
 export interface BotOptions {
   platform: string;
@@ -29,8 +40,14 @@ export interface BotOptions {
 
 const CLARIFY_MINUTES = 10;
 
-export type UndoPayload = { op: 'create'; reminderId: number };
+export type UndoPayload =
+  | { op: 'create'; reminderId: number }
+  | { op: 'cancel'; reminderId: number }
+  | { op: 'edit'; reminderId: number; before: ReminderSnapshot };
 export type ClarifyPayload = { question: string; originalText: string };
+export type ChoosePayload =
+  | { op: 'cancel'; candidates: number[] }
+  | { op: 'edit'; candidates: number[]; changes: ReminderChanges };
 
 const isUndo = (text: string) => /^undo[.!]*$/i.test(text.trim());
 
@@ -91,9 +108,10 @@ export class Bot {
     });
     const actor: ActorContext = { group, member, isAdmin: msg.isFromAdmin };
 
-    const [undo, clarify] = await Promise.all([
+    const [undo, clarify, choose] = await Promise.all([
       findActiveInteraction(this.db, group.id, member.id, 'undo', now),
       findActiveInteraction(this.db, group.id, member.id, 'clarify', now),
+      findActiveInteraction(this.db, group.id, member.id, 'choose', now),
     ]);
 
     const text = msg.text.trim();
@@ -101,6 +119,14 @@ export class Bot {
       // Unmentioned "undo" replies are only answered when there is something to undo.
       if (!msg.mentionsBot && !undo) return;
       return this.handleUndo(msg, actor, undo);
+    }
+    if (choose) {
+      const picked = /^#?\s*(\d+)[.!]?$/.exec(text);
+      if (picked) return this.handleChoice(msg, actor, choose, Number(picked[1]));
+      if (/^(no|none|never ?mind|nevermind|stop)[.!]*$/i.test(text)) {
+        await deleteInteraction(this.db, choose.id);
+        return this.reply(msg, 'OK, nothing changed.');
+      }
     }
     // Otherwise, a reply without a mention is only handled as the answer to an open question.
     if (!msg.mentionsBot && !clarify) return;
@@ -160,8 +186,38 @@ export class Bot {
         return this.reply(msg, helpText(this.opts.botName, actor.group.timezone, now));
       case 'unsupported':
         return this.reply(msg, sanitizeText(command.reason, 300));
-      default:
-        return this.reply(msg, "Sorry, I can't do that yet.");
+      case 'list':
+        return this.reply(msg, listText(await this.reminders.list(actor.group.id), this.opts.botName));
+      case 'cancel':
+        return this.withTarget(msg, actor, command.target, { op: 'cancel' }, (r) => this.doCancel(msg, actor, r));
+      case 'edit': {
+        const changes: ReminderChanges = {
+          title: command.changes.title,
+          startLocal: command.changes.start_local,
+          rrule: command.changes.rrule,
+          makeOneOff: command.changes.make_one_off,
+          offsetsMinutes: command.changes.offsets_minutes,
+          messageStyle: command.changes.message_style,
+        };
+        return this.withTarget(msg, actor, command.target, { op: 'edit', changes }, (r) =>
+          this.doEdit(msg, actor, r, changes),
+        );
+      }
+      case 'set_timezone': {
+        const res = await this.reminders.setTimezone(actor, command.timezone);
+        if (!res.ok) return this.reply(msg, res.error);
+        const abbrev = tzAbbrev(DateTime.fromJSDate(now).setZone(command.timezone));
+        const kept = res.value.rescheduled ? ' Existing reminders keep their local times.' : '';
+        return this.reply(msg, `Timezone set to ${command.timezone} (${abbrev}).${kept}`);
+      }
+      case 'set_policy': {
+        const res = await this.reminders.setPolicy(actor, command.policy);
+        if (!res.ok) return this.reply(msg, res.error);
+        return this.reply(
+          msg,
+          command.policy === 'admins' ? 'OK: only group admins can set reminders now.' : 'OK: anyone in the group can set reminders now.',
+        );
+      }
     }
   }
 
@@ -192,9 +248,7 @@ export class Bot {
 
     const { reminder, occurrences } = result.value;
     await this.openUndoWindow(actor, { op: 'create', reminderId: reminder.id });
-    const nextEvent = occurrences.length
-      ? new Date(Math.min(...occurrences.map((o) => o.fireAt.getTime() + o.offsetMinutes * 60_000)))
-      : null;
+    const nextEvent = nextEventOf(occurrences);
     const subjectName = subject?.lastKnownDisplayName ?? (subject ? 'them' : null);
     await this.reply(msg, createdConfirmation(reminder, nextEvent, subjectName));
   }
@@ -203,10 +257,70 @@ export class Bot {
     if (!undo) return this.reply(msg, `There's nothing to undo (undo works for ${UNDO_MINUTES} minutes after a change).`);
     await deleteInteraction(this.db, undo.id);
     const payload = undo.payload as UndoPayload;
-    if (payload.op === 'create') {
-      const r = await this.reminders.cancel(actor, payload.reminderId, { bypassPermissions: true });
-      return this.reply(msg, r.ok ? `Undone: removed #${r.value.shortId} ${sanitizeText(r.value.title)}.` : r.error);
+    switch (payload.op) {
+      case 'create': {
+        const r = await this.reminders.cancel(actor, payload.reminderId, { bypassPermissions: true });
+        return this.reply(msg, r.ok ? `Undone: removed #${r.value.shortId} ${sanitizeText(r.value.title)}.` : r.error);
+      }
+      case 'cancel': {
+        const r = await this.reminders.reactivate(actor, payload.reminderId);
+        return this.reply(msg, r.ok ? `Undone: #${r.value.reminder.shortId} ${sanitizeText(r.value.reminder.title)} is back on.` : r.error);
+      }
+      case 'edit': {
+        const r = await this.reminders.restore(actor, payload.reminderId, payload.before);
+        if (!r.ok) return this.reply(msg, r.error);
+        const next = nextEventOf(r.value.occurrences);
+        const when = describeWhen({ ...r.value.reminder, startLocal: toIsoLocal(r.value.reminder.startLocal) });
+        const nextText = r.value.reminder.rrule && next ? ` Next: ${formatDay(DateTime.fromJSDate(next).setZone(r.value.reminder.timezone))}.` : '';
+        return this.reply(msg, `Undone: #${r.value.reminder.shortId} is back to ${when}.${nextText}`);
+      }
     }
+  }
+
+  /** Resolves a cancel/edit target; asks "which one?" when it is ambiguous. */
+  private async withTarget(
+    msg: IncomingMessage,
+    actor: ActorContext,
+    target: ReminderTarget,
+    pending: { op: 'cancel' } | { op: 'edit'; changes: ReminderChanges },
+    run: (r: Reminder) => Promise<void>,
+  ): Promise<void> {
+    const active = (await this.reminders.list(actor.group.id)).map((l) => l.reminder);
+    const resolution = resolveTarget(active, target);
+    if (resolution.kind === 'none') return this.reply(msg, resolution.message);
+    if (resolution.kind === 'found') return run(resolution.reminder);
+    await createInteraction(this.db, {
+      groupId: actor.group.id,
+      memberId: actor.member.id,
+      kind: 'choose',
+      payload: { ...pending, candidates: resolution.candidates.map((c) => c.id) } satisfies ChoosePayload,
+      expiresAt: new Date(this.clock.now().getTime() + CLARIFY_MINUTES * 60_000),
+    });
+    const options = resolution.candidates.map((c) => `#${c.shortId} ${sanitizeText(c.title)}`).join(', ');
+    return this.reply(msg, `Which one do you mean: ${options}? Reply with the number.`);
+  }
+
+  private async handleChoice(msg: IncomingMessage, actor: ActorContext, choose: PendingInteraction, shortId: number) {
+    const payload = choose.payload as ChoosePayload;
+    const active = (await this.reminders.list(actor.group.id)).map((l) => l.reminder);
+    const picked = active.find((r) => r.shortId === shortId && payload.candidates.includes(r.id));
+    if (!picked) return this.reply(msg, `#${shortId} isn't one of the options. Reply with one of the numbers I listed.`);
+    await deleteInteraction(this.db, choose.id);
+    return payload.op === 'cancel' ? this.doCancel(msg, actor, picked) : this.doEdit(msg, actor, picked, payload.changes);
+  }
+
+  private async doCancel(msg: IncomingMessage, actor: ActorContext, reminder: Reminder): Promise<void> {
+    const res = await this.reminders.cancel(actor, reminder.id);
+    if (!res.ok) return this.reply(msg, res.error);
+    await this.openUndoWindow(actor, { op: 'cancel', reminderId: reminder.id });
+    return this.reply(msg, cancelledConfirmation(res.value));
+  }
+
+  private async doEdit(msg: IncomingMessage, actor: ActorContext, reminder: Reminder, changes: ReminderChanges) {
+    const res = await this.reminders.edit(actor, reminder.id, changes);
+    if (!res.ok) return this.reply(msg, res.error);
+    await this.openUndoWindow(actor, { op: 'edit', reminderId: reminder.id, before: res.value.before });
+    return this.reply(msg, editedConfirmation(res.value.reminder, nextEventOf(res.value.occurrences)));
   }
 
   private async openUndoWindow(actor: ActorContext, payload: UndoPayload): Promise<void> {
@@ -254,4 +368,9 @@ export class Bot {
   async memberById(id: number): Promise<MemberRow | undefined> {
     return getMember(this.db, id);
   }
+}
+
+function nextEventOf(occurrences: { fireAt: Date; offsetMinutes: number }[]): Date | null {
+  if (occurrences.length === 0) return null;
+  return new Date(Math.min(...occurrences.map((o) => o.fireAt.getTime() + o.offsetMinutes * 60_000)));
 }
