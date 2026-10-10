@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ranti
+      POSTGRES_PASSWORD: ranti
+      POSTGRES_DB: ranti
+    ports:
+      - '5433:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ranti']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

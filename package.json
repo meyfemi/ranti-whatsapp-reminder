@@ -1,0 +1,45 @@
+{
+  "name": "ranti",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ranti: a WhatsApp group reminder bot",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.34.6",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "cli": "tsx src/adapters/cli/main.ts",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate-cli.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.133.0",
+    "drizzle-orm": "0.45.4",
+    "luxon": "3.7.2",
+    "pg": "8.23.1",
+    "pg-boss": "12.37.1",
+    "pino": "10.4.0",
+    "rrule": "2.8.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.5",
+    "@types/luxon": "3.7.6",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "drizzle-kit": "0.31.11",
+    "eslint": "9.39.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.1",
+    "vitest": "5.0.3"
+  }
+}
