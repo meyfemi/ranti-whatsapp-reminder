@@ -3,6 +3,7 @@ import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { createAlerter } from './ops/alert.js';
+import { startHealthServer } from './ops/health.js';
 
 const config = loadConfig();
 const logger = createLogger(config.LOG_LEVEL);
@@ -35,11 +36,18 @@ const app = await createApp({
     })),
 });
 
+const health = await startHealthServer(config.HEALTH_PORT, {
+  pool: app.handle.pool,
+  connectionStatus: () => whatsapp?.connectionStatus ?? 'starting',
+});
+logger.info({ port: config.HEALTH_PORT }, 'Health endpoint listening (/livez, /healthz)');
+
 let shuttingDown = false;
 async function shutdown(signal: string, code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   logger.info({ signal }, 'Shutting down');
+  health.close();
   await app.stop().catch((err) => logger.error({ err }, 'Error during shutdown'));
   process.exit(code);
 }
