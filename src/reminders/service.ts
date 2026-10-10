@@ -1,12 +1,12 @@
 import { eq } from 'drizzle-orm';
 import { TransactionRollbackError } from 'drizzle-orm/errors';
 import type { Db } from '../db/client.js';
-import { allocateShortId, countActiveReminders, insertReminder } from '../db/repositories.js';
+import { allocateShortId, countActiveReminders, getReminder, insertReminder, updateReminder } from '../db/repositories.js';
 import { groups, type Reminder } from '../db/schema.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../scheduler/clock.js';
 import type { ScheduledOccurrence, Scheduler } from '../scheduler/scheduler.js';
-import { canCreate } from './permissions.js';
+import { canCreate, canModify } from './permissions.js';
 import { fail, ok, type ActorContext, type CreateReminderInput, type ServiceResult } from './types.js';
 import { validateCreate } from './validation.js';
 
@@ -77,5 +77,28 @@ export class ReminderService {
       this.logger.info({ reminderId: result.value.reminder.id, groupId: actor.group.id }, 'Reminder created');
     }
     return result;
+  }
+
+  /**
+   * Cancels a reminder. `bypassPermissions` is only for undoing one's own create
+   * (the undo window is tied to the member who created it).
+   */
+  async cancel(
+    actor: ActorContext,
+    reminderId: number,
+    opts: { bypassPermissions?: boolean } = {},
+  ): Promise<ServiceResult<Reminder>> {
+    return this.db.transaction(async (tx) => {
+      const reminder = await getReminder(tx, reminderId);
+      if (!reminder || reminder.groupId !== actor.group.id) return fail<Reminder>("I couldn't find that reminder.");
+      if (!reminder.active) return fail<Reminder>(`#${reminder.shortId} is already cancelled.`);
+      if (!opts.bypassPermissions && !canModify(actor, reminder)) {
+        return fail<Reminder>('Only the person who set this reminder or a group admin can change it.');
+      }
+      const updated = await updateReminder(tx, reminder.id, { active: false, cancelledAt: this.clock.now() });
+      await this.scheduler.cancel(tx, reminder.id);
+      this.logger.info({ reminderId, groupId: actor.group.id }, 'Reminder cancelled');
+      return ok(updated);
+    });
   }
 }

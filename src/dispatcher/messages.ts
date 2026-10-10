@@ -41,13 +41,17 @@ export async function buildReminderMessage(input: BuildMessageInput): Promise<Ou
     const when = describeLead(offsetMinutes, eventLocal);
     const who = subjectToken ? ` (${subjectToken})` : '';
     text = `📅 Heads up: ${title}${who} is ${when}.`;
-  } else if (offsetMinutes === 0) {
-    text =
-      r.kind === 'event'
-        ? `⏰ Reminder: ${title} is starting now (${formatTime(eventLocal)}).`
-        : `⏰ Reminder: ${title}.`;
   } else {
-    text = `⏰ Reminder: ${title} starts in ${formatDuration(offsetMinutes)} (${describeClock(offsetMinutes, eventLocal)}).`;
+    const forWho = subjectToken ? ` for ${subjectToken}` : '';
+    if (offsetMinutes === 0) {
+      text =
+        r.kind === 'event'
+          ? `⏰ Reminder${forWho}: ${title} is starting now (${formatTime(eventLocal)}).`
+          : `⏰ Reminder${forWho}: ${title}.`;
+    } else {
+      text = `⏰ Reminder${forWho}: ${title} starts in ${formatDuration(offsetMinutes)} (${describeClock(offsetMinutes, eventLocal)}).`;
+    }
+    if (r.messageStyle && r.kind === 'generic') text += ` (${sanitizeText(r.messageStyle, 200)})`;
   }
 
   // Defence in depth: never mention anyone other than the subject.

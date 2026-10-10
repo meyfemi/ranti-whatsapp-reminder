@@ -18,15 +18,23 @@ export function validateCreate(
   const title = sanitizeText(input.title, MAX_TITLE_LENGTH);
   if (!title) return fail('The reminder needs a title.');
 
-  const start = parseLocal(input.startLocal);
+  let start = parseLocal(input.startLocal);
   if (!start) return fail("I couldn't understand the date and time.");
-  const startLocal = start.toFormat("yyyy-MM-dd'T'HH:mm:ss");
 
   let rrule: string | null = null;
   if (input.rrule) {
     if (!isValidRrule(input.rrule)) return fail("I couldn't understand how often that should repeat.");
     rrule = normaliseRrule(input.rrule);
   }
+
+  // A plain yearly rule starting on a future 29 Feb would skip the Feb 28s before it.
+  // Anchor it to the most recent leap year at or before now so every year fires.
+  if (rrule === 'FREQ=YEARLY' && start.month === 2 && start.day === 29) {
+    let year = Math.min(start.year, now.getUTCFullYear());
+    while (!isLeapYear(year)) year--;
+    start = start.set({ year });
+  }
+  const startLocal = start.toFormat("yyyy-MM-dd'T'HH:mm:ss");
 
   const offsets = [...new Set(input.offsetsMinutes.length ? input.offsetsMinutes : [0])].sort((a, b) => b - a);
   if (offsets.length > MAX_OFFSETS) return fail(`At most ${MAX_OFFSETS} reminder times per item, please.`);
@@ -42,4 +50,8 @@ export function validateCreate(
 
   const messageStyle = input.messageStyle ? sanitizeText(input.messageStyle, MAX_STYLE_LENGTH) || null : null;
   return ok({ ...input, title, startLocal, rrule, offsetsMinutes: offsets, messageStyle });
+}
+
+function isLeapYear(y: number): boolean {
+  return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
 }

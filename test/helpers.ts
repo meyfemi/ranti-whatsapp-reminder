@@ -109,3 +109,50 @@ export async function makeActor(
   });
   return { group, member, isAdmin: opts.isAdmin ?? false };
 }
+
+// ---------------------------------------------------------------- bot helpers
+
+import { Bot } from '../src/bot/bot.js';
+import type { ParsedCommand } from '../src/parser/schema.js';
+import { ParserUnavailableError, type Parser, type ParserInput } from '../src/parser/types.js';
+
+/** A parser test double: returns queued commands in order and records the inputs it saw. */
+export class ScriptedParser implements Parser {
+  queue: (ParsedCommand | 'unavailable')[] = [];
+  inputs: ParserInput[] = [];
+  async parseCommand(input: ParserInput): Promise<ParsedCommand> {
+    this.inputs.push(input);
+    const next = this.queue.shift();
+    if (!next) throw new Error(`ScriptedParser: no command queued for "${input.text}"`);
+    if (next === 'unavailable') throw new ParserUnavailableError('down');
+    return next;
+  }
+}
+
+export function makeBot(env: TestEnv, parser: Parser): Bot {
+  const bot = new Bot(env.handle.db, env.adapter, parser, env.service, env.clock, silentLogger, {
+    platform: 'test',
+    botName: 'Ranti',
+    defaultTimezone: 'Africa/Lagos',
+  });
+  bot.attach();
+  return bot;
+}
+
+let msgSeq = 0;
+export function message(over: Partial<IncomingMessage> & { text: string }): IncomingMessage {
+  return {
+    messageId: `m-${++msgSeq}`,
+    groupId: 'group-1',
+    senderId: 'alice@s.whatsapp.net',
+    senderAltIds: [],
+    senderDisplayName: 'Alice',
+    mentionedUserIds: (over.mentionedUsers ?? []).map((u) => u.userId),
+    mentionedUsers: [],
+    isReplyToBot: false,
+    mentionsBot: true,
+    isFromAdmin: false,
+    timestamp: new Date(),
+    ...over,
+  };
+}
