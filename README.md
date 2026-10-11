@@ -7,6 +7,8 @@ Ranti is a WhatsApp account you add to your existing groups (family, church, alu
 @Ranti remind everyone about the general meeting at 11am this Sunday, and send a 5 min reminder
 @Ranti every first Saturday of the month remind us to pay dues at 9am
 @Ranti what reminders do we have?
+@Ranti do we have any reminders this week?
+@Ranti when is my birthday?
 @Ranti cancel #4
 @Ranti set timezone to Europe/London
 ```
@@ -53,7 +55,7 @@ pg-boss job / sweeper ──► dispatcher (idempotent send) ◄── scheduler
 | `src/adapters/cli/` | Terminal group simulator with a fast-forwardable clock |
 | `src/bot/` | Routes messages to actions; confirmations, undo, clarifying questions, intro/help text |
 | `src/parser/` | LLM call, `system-prompt.md`, zod schemas, fixtures |
-| `src/reminders/` | Validation, permissions, caps, create/list/cancel/edit/settings, formatting |
+| `src/reminders/` | Validation, permissions, caps, create/list/query/cancel/edit/settings, formatting |
 | `src/scheduler/` | Recurrence engine, occurrence scheduling, pg-boss queue, missed-job recovery |
 | `src/dispatcher/` | Builds and sends due reminders; greeting templates and optional LLM greetings |
 | `src/db/` | Drizzle schema, SQL migrations, repositories |

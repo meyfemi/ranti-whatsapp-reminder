@@ -1,6 +1,7 @@
 import { DateTime } from 'luxon';
 import type { Reminder } from '../db/schema.js';
-import { describeOffsets, describeWhen, formatDay, sanitizeText, tzAbbrev } from '../reminders/format.js';
+import { describeOffsets, describeWhen, formatDay, formatTime, sanitizeText, tzAbbrev } from '../reminders/format.js';
+import type { UpcomingEvent } from '../reminders/query.js';
 import { toIsoLocal } from '../scheduler/scheduler.js';
 
 export const UNDO_MINUTES = 5;
@@ -30,6 +31,7 @@ export function helpText(botName: string, timezone: string, now: Date): string {
     `• Birthdays: "${at} 12 Oct is @John's birthday"`,
     `• Repeat: "${at} every Monday at 6am remind us to send reports"`,
     `• List: "${at} what reminders do we have?"`,
+    `• Ask: "${at} anything on this week?" · "${at} when is my birthday?"`,
     `• Change: "${at} move #3 to 5pm" · Cancel: "${at} cancel #3"`,
     `• Reply "undo" to my confirmation within ${UNDO_MINUTES} minutes to undo it.`,
     `Admins: "${at} only admins can set reminders". Timezone: ${tzLabel(timezone, now)}; change with "${at} set timezone to Europe/London".`,
@@ -79,4 +81,49 @@ export function listText(items: { reminder: Reminder; nextEvent: Date | null }[]
     return `#${r.shortId} ${sanitizeText(r.title)}: ${when}${next}`;
   });
   return [`📋 Reminders (${items.length}):`, ...lines, `Cancel with "@${botName} cancel #<number>".`].join('\n');
+}
+
+const KIND_NOUNS: Record<Reminder['kind'], [string, string]> = {
+  birthday: ['birthday', 'birthdays'],
+  anniversary: ['anniversary', 'anniversaries'],
+  event: ['event', 'events'],
+  generic: ['reminder', 'reminders'],
+};
+const kindNoun = (kind: Reminder['kind'] | null, plural: boolean) => (kind ? KIND_NOUNS[kind] : KIND_NOUNS.generic)[plural ? 1 : 0];
+
+/** Answer to "what's on this week?": events in a period, soonest first. */
+export function periodText(
+  events: UpcomingEvent[],
+  truncated: boolean,
+  period: { from: Date; to: Date; timezone: string },
+  kind: Reminder['kind'] | null,
+  botName: string,
+): string {
+  const from = formatDay(DateTime.fromJSDate(period.from).setZone(period.timezone));
+  const to = formatDay(DateTime.fromJSDate(period.to).setZone(period.timezone));
+  const range = from === to ? `on ${from}` : `between ${from} and ${to}`;
+  if (events.length === 0) return `No ${kindNoun(kind, true)} coming up ${range}.`;
+  const lines = events.map(({ reminder: r, at }) => {
+    const local = DateTime.fromJSDate(at).setZone(r.timezone);
+    return `• ${formatDay(local)}, ${formatTime(local)}: ${sanitizeText(r.title)} (#${r.shortId})`;
+  });
+  const more = truncated ? [`…and more. See them all with "@${botName} what reminders do we have?".`] : [];
+  return [`📅 Coming up ${range}:`, ...lines, ...more].join('\n');
+}
+
+/** Answer to "when is X?": each matching reminder's schedule and next date. */
+export function nextEventsText(events: UpcomingEvent[]): string {
+  const lines = events.map(({ reminder: r, at }) => {
+    const when = describeWhen({ ...r, startLocal: toIsoLocal(r.startLocal) });
+    const next = r.rrule ? ` · next ${formatDay(DateTime.fromJSDate(at).setZone(r.timezone))}` : '';
+    return `${sanitizeText(r.title)} (#${r.shortId}): ${when}${next}`;
+  });
+  return lines.length === 1 ? `${lines[0]}.` : lines.map((l) => `• ${l}`).join('\n');
+}
+
+/** Nothing matched a "when is X?" question. */
+export function noMatchText(kind: Reminder['kind'] | null, subject: 'you' | 'them' | null): string {
+  const what = kindNoun(kind, false);
+  if (subject) return `I don't have ${/^[aeiou]/.test(what) ? 'an' : 'a'} ${what} saved for ${subject}.`;
+  return `I couldn't find a matching ${what}.`;
 }

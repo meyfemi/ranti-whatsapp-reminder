@@ -15,6 +15,7 @@ import type { Logger } from '../logger.js';
 import type { ParsedCommand, ReminderTarget } from '../parser/schema.js';
 import { ParserUnavailableError, type Parser, type ParserMentionedUser } from '../parser/types.js';
 import { describeWhen, formatDay, sanitizeText, tzAbbrev } from '../reminders/format.js';
+import { eventsBetween, filterReminders, nextEvents, periodBounds } from '../reminders/query.js';
 import { resolveTarget } from '../reminders/target.js';
 import type { ReminderChanges, ReminderService, ReminderSnapshot } from '../reminders/service.js';
 import type { ActorContext } from '../reminders/types.js';
@@ -28,6 +29,9 @@ import {
   helpText,
   introText,
   listText,
+  nextEventsText,
+  noMatchText,
+  periodText,
   UNAVAILABLE_TEXT,
   UNDO_MINUTES,
 } from './texts.js';
@@ -200,6 +204,8 @@ export class Bot {
         return this.reply(msg, sanitizeText(command.reason, 300));
       case 'list':
         return this.reply(msg, listText(await this.reminders.list(actor.group.id), this.opts.botName));
+      case 'query':
+        return this.handleQuery(msg, actor, command, ctx.mentioned);
       case 'cancel':
         return this.withTarget(msg, actor, command.target, { op: 'cancel' }, (r) => this.doCancel(msg, actor, r));
       case 'edit': {
@@ -241,10 +247,7 @@ export class Bot {
   ): Promise<void> {
     let subject: MemberRow | undefined;
     if (command.subject_user_id) {
-      const id = command.subject_user_id;
-      subject =
-        mentioned.find((m) => m.ids.includes(id))?.member ??
-        (id === actor.member.platformUserId || actor.member.altUserIds.includes(id) ? actor.member : undefined);
+      subject = this.resolveSubject(command.subject_user_id, actor, mentioned);
       if (!subject) return this.reply(msg, 'Who is this reminder for? Please @mention them.');
     }
     const result = await this.reminders.create(actor, {
@@ -263,6 +266,53 @@ export class Bot {
     const nextEvent = nextEventOf(occurrences);
     const subjectName = subject?.lastKnownDisplayName ?? (subject ? 'them' : null);
     await this.reply(msg, createdConfirmation(reminder, nextEvent, subjectName));
+  }
+
+  /** Answers questions about existing reminders. Read-only, so no permission check. */
+  private async handleQuery(
+    msg: IncomingMessage,
+    actor: ActorContext,
+    command: Extract<ParsedCommand, { action: 'query' }>,
+    mentioned: { member: MemberRow; ids: string[] }[],
+  ): Promise<void> {
+    const now = this.clock.now();
+    if (command.no_match) return this.reply(msg, noMatchText(command.kind, null));
+    let subject: MemberRow | undefined;
+    if (command.subject_user_id) {
+      subject = this.resolveSubject(command.subject_user_id, actor, mentioned);
+      if (!subject) return this.reply(msg, 'Who do you mean? Please @mention them.');
+    }
+    const matching = filterReminders(await listActiveReminders(this.db, actor.group.id), {
+      shortIds: command.short_ids,
+      subjectMemberId: subject?.id ?? null,
+      kind: command.kind,
+    });
+
+    if (command.from_date && command.to_date) {
+      const { start, end } = periodBounds(command.from_date, command.to_date, actor.group.timezone);
+      const { events, truncated } = eventsBetween(matching, start, end, now);
+      const period = { from: start, to: new Date(end.getTime() - 1), timezone: actor.group.timezone };
+      return this.reply(msg, periodText(events, truncated, period, command.kind, this.opts.botName));
+    }
+
+    const upcoming = nextEvents(matching, now);
+    if (upcoming.length === 0) {
+      const who = subject ? (subject.id === actor.member.id ? 'you' : 'them') : null;
+      return this.reply(msg, noMatchText(command.kind, who));
+    }
+    return this.reply(msg, nextEventsText(upcoming));
+  }
+
+  /** The member a parsed user ID refers to: someone mentioned in the message, or the sender. */
+  private resolveSubject(
+    id: string,
+    actor: ActorContext,
+    mentioned: { member: MemberRow; ids: string[] }[],
+  ): MemberRow | undefined {
+    return (
+      mentioned.find((m) => m.ids.includes(id))?.member ??
+      (id === actor.member.platformUserId || actor.member.altUserIds.includes(id) ? actor.member : undefined)
+    );
   }
 
   private async handleUndo(msg: IncomingMessage, actor: ActorContext, undo: PendingInteraction | undefined): Promise<void> {

@@ -44,9 +44,20 @@ const EditCommand = z.object({
   }),
 });
 
+const QueryCommand = z.object({
+  action: z.literal('query'),
+  from_date: z.string().nullable().describe('First day of the period asked about, YYYY-MM-DD, or null if no period'),
+  to_date: z.string().nullable().describe('Last day of the period asked about (inclusive), YYYY-MM-DD, or null if no period'),
+  short_ids: z.array(z.number().int()).describe('#numbers of the specific reminders asked about; empty = any reminder'),
+  subject_user_id: z.string().nullable().describe('ID of the person the question is about, e.g. the sender for "my birthday"'),
+  kind: z.enum(REMINDER_KINDS).nullable().describe('Only reminders of this kind, e.g. birthday; null = any kind'),
+  no_match: z.boolean().describe('true if the question names a reminder or person that matches nothing in the context'),
+});
+
 export const CommandSchema = z.discriminatedUnion('action', [
   CreateCommand,
   z.object({ action: z.literal('list') }),
+  QueryCommand,
   z.object({ action: z.literal('cancel'), target: Target }),
   EditCommand,
   z.object({ action: z.literal('set_timezone'), timezone: z.string().describe('IANA zone, e.g. Europe/London') }),
@@ -62,6 +73,7 @@ export const LlmOutputSchema = z.object({ command: CommandSchema });
 export type ParsedCommand = z.infer<typeof CommandSchema>;
 export type CreateParsed = Extract<ParsedCommand, { action: 'create' }>;
 export type EditParsed = Extract<ParsedCommand, { action: 'edit' }>;
+export type QueryParsed = Extract<ParsedCommand, { action: 'query' }>;
 export type CancelParsed = Extract<ParsedCommand, { action: 'cancel' }>;
 export type ReminderTarget = z.infer<typeof Target>;
 
@@ -74,6 +86,8 @@ const MAX_OFFSET = 60 * 24 * 30;
 const offsetsSchema = z.array(z.number().int().min(0).max(MAX_OFFSET)).max(5);
 const localDateTime = z.string().refine((s) => parseLocal(s) !== null, 'must be a local ISO date-time without offset');
 const rruleSchema = z.string().refine(isValidRrule, 'must be a valid RRULE body (daily or slower)');
+const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((s) => parseLocal(s) !== null, 'must be a date YYYY-MM-DD');
+const MAX_QUERY_DAYS = 366;
 
 function domainSchema(ctx: ValidationContext) {
   const mentioned = new Set(ctx.mentionedUserIds);
@@ -89,6 +103,23 @@ function domainSchema(ctx: ValidationContext) {
         .refine((id) => id === null || mentioned.has(id), 'subject must be one of the mentioned users'),
     }),
     z.object({ action: z.literal('list') }),
+    QueryCommand.extend({
+      from_date: localDate.nullable(),
+      to_date: localDate.nullable(),
+      short_ids: z.array(z.number().int().min(1)).max(20),
+      subject_user_id: z
+        .string()
+        .nullable()
+        .refine((id) => id === null || mentioned.has(id), 'subject must be one of the mentioned users'),
+    }).refine((q) => (q.from_date === null) === (q.to_date === null), 'from_date and to_date go together')
+      .refine((q) => {
+        // Runs even when a date failed its own check, so it must not assume valid dates.
+        const from = q.from_date ? parseLocal(q.from_date) : null;
+        const to = q.to_date ? parseLocal(q.to_date) : null;
+        if (!from || !to) return true;
+        const days = to.diff(from, 'days').days;
+        return days >= 0 && days <= MAX_QUERY_DAYS;
+      }, 'period must run forwards and be at most a year'),
     z.object({
       action: z.literal('cancel'),
       target: Target.refine((t) => t.short_id !== null || !!t.description?.trim(), 'target is empty'),
@@ -133,6 +164,8 @@ export function validateCommand(raw: unknown, ctx: ValidationContext): Validatio
     question = 'Who is this reminder for? Please @mention them.';
   } else if (issues.some((i) => i.startsWith('timezone'))) {
     question = "I don't recognise that timezone. Could you give it like Europe/London or Africa/Lagos?";
+  } else if (action === 'query') {
+    question = 'Which reminder or which dates do you mean?';
   } else if (action === 'cancel' || action === 'edit') {
     question = 'Which reminder do you mean? You can use its number, e.g. #4.';
   }

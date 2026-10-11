@@ -29,6 +29,9 @@ const WED = '2026-10-07T10:00:00+01:00'; // Wednesday 7 Oct 2026, 10:00 WAT
 const SUN = '2026-10-11T08:00:00+01:00'; // Sunday 11 Oct 2026, 08:00 WAT
 
 const create = (c: Omit<Extract<ParsedCommand, { action: 'create' }>, 'action'>): ParsedCommand => ({ action: 'create', ...c });
+const query = (c: Partial<Omit<Extract<ParsedCommand, { action: 'query' }>, 'action'>>): ParsedCommand => ({
+  action: 'query', from_date: null, to_date: null, short_ids: [], subject_user_id: null, kind: null, no_match: false, ...c,
+});
 const noChanges = { title: null, start_local: null, rrule: null, make_one_off: false, offsets_minutes: null, message_style: null };
 
 export const FIXTURES: Fixture[] = [
@@ -58,6 +61,59 @@ export const FIXTURES: Fixture[] = [
   },
   { name: 'list', input: { now: WED, text: 'what reminders do we have?' }, expected: { action: 'list' } },
   { name: 'list (casual)', input: { now: WED, text: 'show me the reminders' }, expected: { action: 'list' } },
+  {
+    name: 'query this week',
+    input: { now: WED, text: 'do we have any reminder this week?' },
+    expected: query({ from_date: '2026-10-07', to_date: '2026-10-11' }),
+  },
+  {
+    name: 'query own birthday',
+    input: {
+      now: WED, text: 'when is my birthday?',
+      activeReminders: [{ shortId: 1, title: "Alice's birthday", kind: 'birthday', when: 'every year on 12 Oct at 09:00 (WAT)' }],
+    },
+    expected: query({ subject_user_id: SENDER.id, kind: 'birthday' }),
+  },
+  {
+    name: "query a mentioned person's birthday",
+    input: { now: WED, text: `when is ${JOHN.token}'s birthday?`, mentionedUsers: [JOHN] },
+    expected: query({ subject_user_id: JOHN.id, kind: 'birthday' }),
+  },
+  {
+    name: 'query a named reminder',
+    input: {
+      now: WED, text: 'when is the general meeting?',
+      activeReminders: [
+        { shortId: 2, title: 'General meeting', kind: 'event', when: 'Sun 11 Oct, 11:00 (WAT)' },
+        { shortId: 4, title: 'Pay dues', kind: 'generic', when: 'every first Saturday of the month at 09:00 (WAT)' },
+      ],
+    },
+    expected: query({ short_ids: [2] }),
+  },
+  {
+    name: 'query birthdays next month',
+    input: { now: WED, text: 'any birthdays next month?' },
+    expected: query({ from_date: '2026-11-01', to_date: '2026-11-30', kind: 'birthday' }),
+  },
+  {
+    name: 'query tomorrow',
+    input: { now: WED, text: "what's happening tomorrow?" },
+    expected: query({ from_date: '2026-10-08', to_date: '2026-10-08' }),
+  },
+  {
+    name: 'query unknown reminder',
+    input: {
+      now: WED, text: 'when is the picnic?',
+      activeReminders: [{ shortId: 2, title: 'General meeting', kind: 'event', when: 'Sun 11 Oct, 11:00 (WAT)' }],
+    },
+    expected: query({ no_match: true }),
+  },
+  {
+    name: 'public holiday is not a group reminder',
+    input: { now: WED, text: 'when is Independence Day?' },
+    expected: { action: 'unsupported', reason: 'I can only help with reminders for this group.' },
+    alsoAccept: ['query'],
+  },
   {
     name: 'cancel by number',
     input: { now: WED, text: 'cancel #4' },
@@ -301,6 +357,17 @@ export function compareCommands(f: Fixture, actual: ParsedCommand): string[] {
     if (e.changes.offsets_minutes && !sameSet(e.changes.offsets_minutes, actual.changes.offsets_minutes)) {
       problems.push(`offsets: expected ${e.changes.offsets_minutes}, got ${actual.changes.offsets_minutes}`);
     }
+  }
+  if (e.action === 'query' && actual.action === 'query') {
+    if (e.from_date !== actual.from_date || e.to_date !== actual.to_date) {
+      problems.push(`period: expected ${e.from_date}..${e.to_date}, got ${actual.from_date}..${actual.to_date}`);
+    }
+    if (!sameSet(e.short_ids, actual.short_ids)) problems.push(`short_ids: expected ${e.short_ids}, got ${actual.short_ids}`);
+    if (e.subject_user_id !== actual.subject_user_id) {
+      problems.push(`subject: expected ${e.subject_user_id}, got ${actual.subject_user_id}`);
+    }
+    if (e.kind !== actual.kind) problems.push(`kind: expected ${e.kind}, got ${actual.kind}`);
+    if (e.no_match !== actual.no_match) problems.push(`no_match: expected ${e.no_match}, got ${actual.no_match}`);
   }
   if (e.action === 'set_timezone' && actual.action === 'set_timezone' && e.timezone !== actual.timezone) {
     problems.push(`timezone: expected ${e.timezone}, got ${actual.timezone}`);

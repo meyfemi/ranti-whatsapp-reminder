@@ -61,6 +61,30 @@ describe('validateCommand', () => {
     expect(!bad.ok && bad.fallback.action).toBe('clarify');
   });
 
+  it('validates queries', () => {
+    const query = (over: Record<string, unknown>) => ({
+      command: {
+        action: 'query', from_date: null, to_date: null, short_ids: [], subject_user_id: null, kind: null, no_match: false,
+        ...over,
+      },
+    });
+    expect(validateCommand(query({}), ctx).ok).toBe(true);
+    expect(validateCommand(query({ from_date: '2026-10-07', to_date: '2026-10-11', kind: 'birthday' }), ctx).ok).toBe(true);
+    expect(validateCommand(query({ subject_user_id: '99887766@lid' }), ctx).ok).toBe(true);
+    for (const bad of [
+      { from_date: '2026-10-07', to_date: null },
+      { from_date: '2026-10-11', to_date: '2026-10-07' },
+      { from_date: '2026-01-01', to_date: '2027-06-01' },
+      { from_date: '2026-10-07T00:00:00', to_date: '2026-10-11T00:00:00' },
+      { from_date: 'this week', to_date: 'this week' },
+      { subject_user_id: '111@s.whatsapp.net' },
+    ]) {
+      const r = validateCommand(query(bad), ctx);
+      expect(r.ok, JSON.stringify(bad)).toBe(false);
+      expect(!r.ok && r.fallback.action).toBe('clarify');
+    }
+  });
+
   it('requires a cancel target', () => {
     expect(validateCommand({ command: { action: 'cancel', target: { short_id: 4, description: null } } }, ctx).ok).toBe(true);
     expect(validateCommand({ command: { action: 'cancel', target: { short_id: null, description: ' ' } } }, ctx).ok).toBe(false);

@@ -80,6 +80,101 @@ describe('list', () => {
   });
 });
 
+const query = (over: Partial<Extract<ParsedCommand, { action: 'query' }>> = {}): ParsedCommand => ({
+  action: 'query', from_date: null, to_date: null, short_ids: [], subject_user_id: null, kind: null, no_match: false, ...over,
+});
+
+describe('query', () => {
+  const MENTION_BOB = {
+    mentionedUsers: [{ userId: 'bob@s.whatsapp.net', altUserIds: [], displayName: 'Bob' }],
+  };
+
+  async function seed() {
+    await say(create('General meeting')); // #1 Sun 11 Oct 11:00
+    await say(create('Attendance', { kind: 'generic', start_local: '2026-10-07T21:00:00', rrule: 'FREQ=DAILY' })); // #2
+    await say(
+      create("Alice's birthday", {
+        kind: 'birthday', start_local: '2026-12-02T09:00:00', rrule: 'FREQ=YEARLY', subject_user_id: 'alice@s.whatsapp.net',
+      }),
+    ); // #3
+    parser.queue.push(
+      create("Bob's birthday", {
+        kind: 'birthday', start_local: '2027-03-03T09:00:00', rrule: 'FREQ=YEARLY', subject_user_id: 'bob@s.whatsapp.net',
+      }),
+    );
+    await env.adapter.receive(message({ text: 'cmd', ...MENTION_BOB })); // #4 (the test group's cap)
+  }
+
+  it("lists this week's events, repeats included, without the ones already past", async () => {
+    await seed();
+    expect(await say(query({ from_date: '2026-10-07', to_date: '2026-10-11' }))).toBe(
+      [
+        '📅 Coming up between Wed 7 Oct and Sun 11 Oct:',
+        '• Wed 7 Oct, 21:00: Attendance (#2)',
+        '• Thu 8 Oct, 21:00: Attendance (#2)',
+        '• Fri 9 Oct, 21:00: Attendance (#2)',
+        '• Sat 10 Oct, 21:00: Attendance (#2)',
+        '• Sun 11 Oct, 11:00: General meeting (#1)',
+        '• Sun 11 Oct, 21:00: Attendance (#2)',
+      ].join('\n'),
+    );
+  });
+
+  it('says when a period is empty', async () => {
+    await seed();
+    expect(await say(query({ from_date: '2026-11-01', to_date: '2026-11-30', kind: 'birthday' }))).toBe(
+      'No birthdays coming up between Sun 1 Nov and Mon 30 Nov.',
+    );
+    expect(await say(query({ from_date: '2026-10-12', to_date: '2026-10-12', kind: 'event' }))).toBe(
+      'No events coming up on Mon 12 Oct.',
+    );
+  });
+
+  it("answers the sender's own birthday", async () => {
+    await seed();
+    expect(await say(query({ subject_user_id: 'alice@s.whatsapp.net', kind: 'birthday' }))).toBe(
+      "Alice's birthday (#3): every year on 2 Dec at 09:00 (WAT) · next Wed 2 Dec.",
+    );
+  });
+
+  it("answers a mentioned person's birthday", async () => {
+    await seed();
+    parser.queue.push(query({ subject_user_id: 'bob@s.whatsapp.net', kind: 'birthday' }));
+    await env.adapter.receive(message({ text: 'when is @bob birthday', ...MENTION_BOB }));
+    expect(lastText()).toBe("Bob's birthday (#4): every year on 3 Mar at 09:00 (WAT) · next Wed 3 Mar.");
+  });
+
+  it('answers about a specific reminder', async () => {
+    await seed();
+    expect(await say(query({ short_ids: [1] }))).toBe('General meeting (#1): Sun 11 Oct, 11:00 (WAT).');
+    expect(await say(query({ short_ids: [1, 2] }))).toBe(
+      [
+        '• Attendance (#2): every day at 21:00 (WAT) · next Wed 7 Oct',
+        '• General meeting (#1): Sun 11 Oct, 11:00 (WAT)',
+      ].join('\n'),
+    );
+  });
+
+  it('says when nothing matches', async () => {
+    await seed();
+    expect(await say(query({ subject_user_id: 'bob@s.whatsapp.net', kind: 'birthday' }), BOB)).toBe(
+      "Bob's birthday (#4): every year on 3 Mar at 09:00 (WAT) · next Wed 3 Mar.",
+    );
+    await say(cancel(3));
+    expect(await say(query({ subject_user_id: 'alice@s.whatsapp.net', kind: 'birthday' }))).toBe(
+      "I don't have a birthday saved for you.",
+    );
+    expect(await say(query({ kind: 'anniversary' }))).toBe("I couldn't find a matching anniversary.");
+    expect(await say(query({ no_match: true }))).toBe("I couldn't find a matching reminder.");
+  });
+
+  it('lets anyone ask, even when only admins can set reminders', async () => {
+    await seed();
+    await say({ action: 'set_policy', policy: 'admins' }, ADMIN);
+    expect(await say(query({ short_ids: [1] }), BOB)).toBe('General meeting (#1): Sun 11 Oct, 11:00 (WAT).');
+  });
+});
+
 describe('cancel', () => {
   it('lets the creator cancel and undo the cancel', async () => {
     await say(create('General meeting', { offsets_minutes: [5, 0] }));
