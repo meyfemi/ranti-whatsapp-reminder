@@ -133,7 +133,7 @@ describe('query', () => {
   it("answers the sender's own birthday", async () => {
     await seed();
     expect(await say(query({ subject_user_id: 'alice@s.whatsapp.net', kind: 'birthday' }))).toBe(
-      "Alice's birthday (#3): every year on 2 Dec at 09:00 (WAT) · next Wed 2 Dec.",
+      "Alice's birthday (#3): Every year on 2 Dec at 09:00 (WAT)\nNext: Wed 2 Dec.",
     );
   });
 
@@ -141,7 +141,7 @@ describe('query', () => {
     await seed();
     parser.queue.push(query({ subject_user_id: 'bob@s.whatsapp.net', kind: 'birthday' }));
     await env.adapter.receive(message({ text: 'when is @bob birthday', ...MENTION_BOB }));
-    expect(lastText()).toBe("Bob's birthday (#4): every year on 3 Mar at 09:00 (WAT) · next Wed 3 Mar.");
+    expect(lastText()).toBe("Bob's birthday (#4): Every year on 3 Mar at 09:00 (WAT)\nNext: Wed 3 Mar.");
   });
 
   it('answers about a specific reminder', async () => {
@@ -149,7 +149,8 @@ describe('query', () => {
     expect(await say(query({ short_ids: [1] }))).toBe('General meeting (#1): Sun 11 Oct, 11:00 (WAT).');
     expect(await say(query({ short_ids: [1, 2] }))).toBe(
       [
-        '• Attendance (#2): every day at 21:00 (WAT) · next Wed 7 Oct',
+        '• Attendance (#2): Every day at 21:00 (WAT)',
+        '   Next: Wed 7 Oct',
         '• General meeting (#1): Sun 11 Oct, 11:00 (WAT)',
       ].join('\n'),
     );
@@ -158,7 +159,7 @@ describe('query', () => {
   it('says when nothing matches', async () => {
     await seed();
     expect(await say(query({ subject_user_id: 'bob@s.whatsapp.net', kind: 'birthday' }), BOB)).toBe(
-      "Bob's birthday (#4): every year on 3 Mar at 09:00 (WAT) · next Wed 3 Mar.",
+      "Bob's birthday (#4): Every year on 3 Mar at 09:00 (WAT)\nNext: Wed 3 Mar.",
     );
     await say(cancel(3));
     expect(await say(query({ subject_user_id: 'alice@s.whatsapp.net', kind: 'birthday' }))).toBe(

@@ -115,10 +115,11 @@ export function periodText(
 export function nextEventsText(events: UpcomingEvent[]): string {
   const lines = events.map(({ reminder: r, at }) => {
     const when = describeWhen({ ...r, startLocal: toIsoLocal(r.startLocal) });
-    const next = r.rrule ? ` · next ${formatDay(DateTime.fromJSDate(at).setZone(r.timezone))}` : '';
-    return `${sanitizeText(r.title)} (#${r.shortId}): ${when}${next}`;
+    const head = `${sanitizeText(r.title)} (#${r.shortId}): ${when.charAt(0).toUpperCase()}${when.slice(1)}`;
+    return r.rrule ? [head, `Next: ${formatDay(DateTime.fromJSDate(at).setZone(r.timezone))}`] : [head];
   });
-  return lines.length === 1 ? `${lines[0]}.` : lines.map((l) => `• ${l}`).join('\n');
+  if (lines.length === 1) return `${lines[0].join('\n')}.`;
+  return lines.map(([head, ...rest]) => [`• ${head}`, ...rest.map((l) => `   ${l}`)].join('\n')).join('\n');
 }
 
 /** Nothing matched a "when is X?" question. */
