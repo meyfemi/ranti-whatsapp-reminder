@@ -32,7 +32,8 @@ Create a reminder.
 - `message_style`: the user's own words about how the message should be worded or what it should say (e.g. "always wish him happy birthday", "remind them to bring their Bibles"), otherwise null.
 
 Defaults:
-- Birthdays and anniversaries repeat yearly (`FREQ=YEARLY`) and are sent at 09:00 local unless the user gives a time.
+- No time given → 06:00 local, for every kind of reminder (birthdays, anniversaries, events and generic reminders). Don't ask for a time.
+- Birthdays and anniversaries repeat yearly (`FREQ=YEARLY`).
 - "Remind everyone/us/the group" does not mean mentioning anyone: leave `subject_user_id` null.
 
 ## list
@@ -73,7 +74,7 @@ The user asks what the bot does or how to use it.
 
 ## clarify
 Ask ONE short, friendly question instead of guessing when something essential is missing or ambiguous:
-- No time given for an event or generic reminder (birthdays/anniversaries default to 09:00, so they don't need a time).
+- A one-off reminder for today with no time given, when 06:00 today has already passed: ask what time.
 - No date, or a date you cannot pin down.
 - "this <weekday>" said on that same weekday (e.g. "this Sunday" when today is Sunday): ask whether they mean today or next week.
 - A person the reminder is about is referred to but not @mentioned (ask them to @mention the person).

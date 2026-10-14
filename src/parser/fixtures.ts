@@ -39,7 +39,7 @@ export const FIXTURES: Fixture[] = [
     name: 'birthday with style',
     input: { now: WED, text: `remember 12 Oct is ${JOHN.token}'s birthday, always wish him happy birthday`, mentionedUsers: [JOHN] },
     expected: create({
-      title: "John's birthday", kind: 'birthday', start_local: '2026-10-12T09:00:00', rrule: 'FREQ=YEARLY',
+      title: "John's birthday", kind: 'birthday', start_local: '2026-10-12T06:00:00', rrule: 'FREQ=YEARLY',
       offsets_minutes: [0], subject_user_id: JOHN.id, message_style: 'always wish him happy birthday',
     }),
   },
@@ -152,9 +152,17 @@ export const FIXTURES: Fixture[] = [
     expected: { action: 'set_timezone', timezone: 'Africa/Nairobi' },
   },
   {
-    name: 'event without a time → clarify',
+    name: 'event without a time → 06:00',
     input: { now: WED, text: 'remind us about the meeting this Sunday' },
-    expected: { action: 'clarify', question: 'What time is the meeting on Sunday?' },
+    expected: create({
+      title: 'Meeting', kind: 'event', start_local: '2026-10-11T06:00:00', rrule: null,
+      offsets_minutes: [0], subject_user_id: null, message_style: null,
+    }),
+  },
+  {
+    name: 'today without a time, after 06:00 → clarify',
+    input: { now: WED, text: 'remind us to pay the electricity bill today' },
+    expected: { action: 'clarify', question: 'What time today should I remind you to pay the electricity bill?' },
   },
   {
     name: '"this Sunday" said on a Sunday → clarify',
@@ -201,7 +209,7 @@ export const FIXTURES: Fixture[] = [
     name: 'anniversary for a LID-addressed member, next year',
     input: { now: WED, text: `${MARY.token}'s work anniversary is 3 March`, mentionedUsers: [MARY] },
     expected: create({
-      title: "Mary's work anniversary", kind: 'anniversary', start_local: '2027-03-03T09:00:00', rrule: 'FREQ=YEARLY',
+      title: "Mary's work anniversary", kind: 'anniversary', start_local: '2027-03-03T06:00:00', rrule: 'FREQ=YEARLY',
       offsets_minutes: [0], subject_user_id: MARY.id, message_style: null,
     }),
   },
@@ -283,7 +291,7 @@ export const FIXTURES: Fixture[] = [
     name: "sender's own Feb 29 birthday",
     input: { now: WED, text: 'my birthday is on 29 February' },
     expected: create({
-      title: "Alice's birthday", kind: 'birthday', start_local: '2024-02-29T09:00:00', rrule: 'FREQ=YEARLY',
+      title: "Alice's birthday", kind: 'birthday', start_local: '2024-02-29T06:00:00', rrule: 'FREQ=YEARLY',
       offsets_minutes: [0], subject_user_id: SENDER.id, message_style: null,
     }),
   },
