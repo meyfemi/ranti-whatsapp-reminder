@@ -144,6 +144,42 @@ describe('Bot', () => {
     expect(parser.inputs).toHaveLength(0);
   });
 
+  it("a bare mention under someone's post parses that post as the request", async () => {
+    const post = { text: 'Reminde us to meet by 7:30pm on friday', senderId: 'john@s.whatsapp.net', senderAltIds: ['john@lid'], senderDisplayName: 'John' };
+    parser.queue.push({ ...meeting, title: 'Meeting', start_local: '2026-10-09T19:30:00', offsets_minutes: [0] });
+    await env.adapter.receive(message({ text: '', quoted: post }));
+    expect(parser.inputs[0]!.text).toBe('');
+    expect(parser.inputs[0]!.quoted).toEqual({ text: post.text, author: { id: 'john@s.whatsapp.net', name: 'John' } });
+    expect(lastText()).toMatch(/^Got it: Meeting \(#1\), Fri 9 Oct, 19:30 \(WAT\)/);
+    // The person who tagged the bot owns the undo window.
+    await env.adapter.receive(message({ text: 'undo', mentionsBot: false, isReplyToBot: true }));
+    expect(lastText()).toBe('Undone: removed #1 Meeting.');
+  });
+
+  it("links \"my birthday\" in a quoted post to the post's author, and keeps the post when clarifying", async () => {
+    const post = { text: 'my birthday is on the 12th', senderId: 'john@s.whatsapp.net', senderAltIds: ['john@lid'], senderDisplayName: 'John' };
+    parser.queue.push({ action: 'clarify', question: 'Which month is the birthday in?' });
+    await env.adapter.receive(message({ text: 'save this', quoted: post }));
+    parser.queue.push({
+      action: 'create',
+      title: "John's birthday",
+      kind: 'birthday',
+      start_local: '2026-10-12T06:00:00',
+      rrule: 'FREQ=YEARLY',
+      offsets_minutes: [0],
+      subject_user_id: 'john@lid',
+      message_style: null,
+    });
+    await env.adapter.receive(message({ text: 'October', mentionsBot: false, isReplyToBot: true }));
+    expect(parser.inputs[1]!.pending!.originalText).toBe('save this');
+    expect(parser.inputs[1]!.quoted).toEqual(parser.inputs[0]!.quoted);
+    expect(lastText()).toMatch(/^Got it: John's birthday \(#1\)/);
+    const { rows } = await env.handle.pool.query(
+      'select m.platform_user_id from reminders r join members m on m.id = r.subject_member_id',
+    );
+    expect(rows[0].platform_user_id).toBe('john@s.whatsapp.net');
+  });
+
   it('posts a concise intro when added to a group', async () => {
     await env.adapter.botAdded('group-new');
     const intro = env.adapter.sent.at(-1)!;

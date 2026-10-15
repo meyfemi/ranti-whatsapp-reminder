@@ -1,4 +1,4 @@
-import type { ChatAdapter, IncomingMessage } from '../adapters/types.js';
+import type { ChatAdapter, IncomingMessage, QuotedMessage } from '../adapters/types.js';
 import type { Db } from '../db/client.js';
 import {
   createInteraction,
@@ -48,7 +48,8 @@ export type UndoPayload =
   | { op: 'create'; reminderId: number }
   | { op: 'cancel'; reminderId: number }
   | { op: 'edit'; reminderId: number; before: ReminderSnapshot };
-export type ClarifyPayload = { question: string; originalText: string };
+/** `quoted` is the post the bot was tagged under, kept so the answer is parsed with it. */
+export type ClarifyPayload = { question: string; originalText: string; quoted?: QuotedMessage };
 export type ChoosePayload =
   | { op: 'cancel'; candidates: number[] }
   | { op: 'edit'; candidates: number[]; changes: ReminderChanges };
@@ -146,9 +147,13 @@ export class Bot {
     }
     // Otherwise, a reply without a mention is only handled as the answer to an open question.
     if (!msg.mentionsBot && !clarify) return;
-    if (!text) return this.reply(msg, helpText(this.opts.botName, group.timezone, now));
+    // A bare mention shows help, unless it is under someone's post: then the post is the request.
+    if (!text && !msg.quoted) return this.reply(msg, helpText(this.opts.botName, group.timezone, now));
 
+    const pending = clarify ? (clarify.payload as ClarifyPayload) : undefined;
+    const quoted = msg.quoted ?? pending?.quoted;
     const mentioned = await this.upsertMentioned(group, msg);
+    const author = quoted ? await this.upsertQuotedAuthor(group, quoted) : undefined;
     const active = await listActiveReminders(this.db, group.id);
     let command: ParsedCommand;
     try {
@@ -164,7 +169,8 @@ export class Bot {
           kind: r.kind,
           when: describeWhen({ ...r, startLocal: toIsoLocal(r.startLocal) }),
         })),
-        pending: clarify ? (clarify.payload as ClarifyPayload) : undefined,
+        quoted: quoted && author ? { text: quoted.text, author: { id: quoted.senderId, name: author.name } } : undefined,
+        pending: pending && { question: pending.question, originalText: pending.originalText },
       });
     } catch (err) {
       if (err instanceof ParserUnavailableError) return this.reply(msg, UNAVAILABLE_TEXT);
@@ -173,14 +179,21 @@ export class Bot {
     this.logger.debug({ action: command.action, groupId: group.id }, 'Parsed command');
 
     if (clarify && command.action !== 'clarify') await deleteInteraction(this.db, clarify.id);
-    await this.execute(msg, actor, command, { text, clarify, mentioned });
+    // "Me" in a quoted post is its author, so the author can be the reminder's subject too.
+    const subjects = author ? [...mentioned, author] : mentioned;
+    await this.execute(msg, actor, command, { text, quoted, clarify, mentioned: subjects });
   }
 
   private async execute(
     msg: IncomingMessage,
     actor: ActorContext,
     command: ParsedCommand,
-    ctx: { text: string; clarify: PendingInteraction | undefined; mentioned: { member: MemberRow; ids: string[] }[] },
+    ctx: {
+      text: string;
+      quoted: QuotedMessage | undefined;
+      clarify: PendingInteraction | undefined;
+      mentioned: { member: MemberRow; ids: string[] }[];
+    },
   ): Promise<void> {
     const now = this.clock.now();
     switch (command.action) {
@@ -193,7 +206,7 @@ export class Bot {
           groupId: actor.group.id,
           memberId: actor.member.id,
           kind: 'clarify',
-          payload: { question: command.question, originalText } satisfies ClarifyPayload,
+          payload: { question: command.question, originalText, quoted: ctx.quoted } satisfies ClarifyPayload,
           expiresAt: new Date(now.getTime() + CLARIFY_MINUTES * 60_000),
         });
         return this.reply(msg, sanitizeText(command.question, 300));
@@ -420,6 +433,21 @@ export class Bot {
       });
     }
     return out;
+  }
+
+  /** Records the quoted post's author as a member, so "my birthday" in their post can link to them. */
+  private async upsertQuotedAuthor(
+    group: Group,
+    quoted: QuotedMessage,
+  ): Promise<{ member: MemberRow; ids: string[]; name: string }> {
+    const member = await upsertMember(this.db, group.id, {
+      userId: quoted.senderId,
+      altUserIds: quoted.senderAltIds,
+      displayName: quoted.senderDisplayName,
+    });
+    const ids = [...new Set([member.platformUserId, ...member.altUserIds, quoted.senderId, ...quoted.senderAltIds])];
+    const name = member.lastKnownDisplayName ?? quoted.senderDisplayName ?? this.adapter.formatMention(quoted.senderId);
+    return { member, ids, name };
   }
 
   private async reply(msg: IncomingMessage, text: string): Promise<void> {

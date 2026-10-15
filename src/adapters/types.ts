@@ -18,6 +18,14 @@ export interface MentionedUser {
   displayName?: string;
 }
 
+/** Someone else's post that a message replies to (never one of the bot's own messages). */
+export interface QuotedMessage {
+  text: string;
+  senderId: string;
+  senderAltIds: string[];
+  senderDisplayName?: string;
+}
+
 export interface IncomingMessage {
   /** Platform message ID. */
   messageId: string;
@@ -28,13 +36,15 @@ export interface IncomingMessage {
   senderDisplayName: string;
   /** Message text with the bot mention stripped. */
   text: string;
-  /** Users mentioned in the message, excluding the bot. */
+  /** Users mentioned in the message or in the post it quotes, excluding the bot. */
   mentionedUserIds: string[];
   mentionedUsers: MentionedUser[];
   /** ID of the message being replied to, if this is a reply. */
   quotedMessageId?: string;
   /** True when the quoted message was sent by the bot. */
   isReplyToBot: boolean;
+  /** The quoted post, when this replies to someone other than the bot (e.g. "@bot" under "meet at 7pm Friday"). */
+  quoted?: QuotedMessage;
   /** True when the bot was @mentioned. */
   mentionsBot: boolean;
   isFromAdmin: boolean;

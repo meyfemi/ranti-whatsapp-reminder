@@ -41,6 +41,29 @@ describe('CliAdapter', () => {
     expect(m.quotedMessageId).toBeDefined();
   });
 
+  it("/replyto quotes the user's last post in this group", async () => {
+    const { adapter, received, printed } = setup();
+    await adapter.handleLine('/as bola');
+    await adapter.handleLine('/replyto john @Ranti');
+    expect(printed()).toContain("john hasn't posted in this group yet.");
+    await adapter.handleLine('/as john');
+    await adapter.handleLine('Remind us to meet @bola by 7:30pm on Friday');
+    await adapter.handleLine('/as alice');
+    await adapter.handleLine('/replyto john @Ranti');
+    const m = received.at(-1)!;
+    expect(m.mentionsBot).toBe(true);
+    expect(m.text).toBe('');
+    expect(m.isReplyToBot).toBe(false);
+    expect(m.quoted).toEqual({
+      text: 'Remind us to meet @bola by 7:30pm on Friday',
+      senderId: 'cli:john',
+      senderAltIds: [],
+      senderDisplayName: 'john',
+    });
+    expect(m.quotedMessageId).toBe(received.at(-2)!.messageId);
+    expect(m.mentionedUserIds).toEqual(['cli:bola']);
+  });
+
   it('delivers unmentioned chatter with mentionsBot=false', async () => {
     const { adapter, received } = setup();
     await adapter.handleLine('just chatting');

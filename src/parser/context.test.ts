@@ -23,6 +23,14 @@ describe('parser context', () => {
     expect(allowedSubjectIds(input)).toEqual(['cli:alice', 'cli:john', 'john@lid']);
   });
 
+  it('adds a quoted post and allows its author as a subject', () => {
+    const quotedInput = { ...input, text: '', pending: undefined, quoted: { text: 'my birthday is 12 Oct', author: { id: 'cli:bola', name: 'bola' } } };
+    expect(buildUserContent(quotedInput)).toContain(
+      '<quoted_message author_id="cli:bola" author_name="bola">\nmy birthday is 12 Oct\n</quoted_message>\n\n<message>\n\n</message>',
+    );
+    expect(allowedSubjectIds(quotedInput)).toEqual(['cli:alice', 'cli:john', 'john@lid', 'cli:bola']);
+  });
+
   it('loads the system prompt with the bot name filled in', () => {
     const prompt = loadSystemPrompt('Ranti');
     expect(prompt).toContain('command parser for Ranti');

@@ -22,6 +22,7 @@ function msg(over: {
   text?: string;
   mentioned?: string[];
   quotedParticipant?: string;
+  quotedMessage?: unknown;
   remoteJid?: string;
   participant?: string;
   participantAlt?: string;
@@ -32,7 +33,7 @@ function msg(over: {
     text: over.text ?? 'hello',
     contextInfo: {
       mentionedJid: over.mentioned ?? [],
-      ...(over.quotedParticipant ? { stanzaId: 'BOTMSG1', participant: over.quotedParticipant, quotedMessage: { conversation: 'x' } } : {}),
+      ...(over.quotedParticipant ? { stanzaId: 'BOTMSG1', participant: over.quotedParticipant, quotedMessage: over.quotedMessage ?? { conversation: 'x' } } : {}),
     },
   };
   const message = over.wrap === 'ephemeral' ? { ephemeralMessage: { message: { extendedTextMessage: extended } } } : { extendedTextMessage: extended };
@@ -98,6 +99,37 @@ describe('parseRaw', () => {
     expect(raw.quotedMessageId).toBe('BOTMSG1');
     expect(parseRaw(msg({ text: 'undo', quotedParticipant: BOT_PN }), BOT_IDS)!.isReplyToBot).toBe(true);
     expect(parseRaw(msg({ text: 'undo', quotedParticipant: JOHN_LID }), BOT_IDS)).toBeNull();
+  });
+
+  it("carries the quoted post when the bot is tagged under someone else's message", () => {
+    const raw = parseRaw(
+      msg({
+        text: '@55555555555555',
+        mentioned: [BOT_LID],
+        quotedParticipant: JOHN_LID,
+        quotedMessage: {
+          extendedTextMessage: {
+            text: 'Remind us to meet @2348000000001 by 7:30pm on Friday',
+            contextInfo: { mentionedJid: [ALICE_PN] },
+          },
+        },
+      }),
+      BOT_IDS,
+    )!;
+    expect(raw.text).toBe('');
+    expect(raw.quoted).toEqual({ text: 'Remind us to meet @2348000000001 by 7:30pm on Friday', senderId: JOHN_LID });
+    expect(raw.mentionedJids).toEqual([ALICE_PN]);
+    expect(toIncoming(raw, participants).quoted).toEqual({
+      text: 'Remind us to meet @2348000000001 by 7:30pm on Friday',
+      senderId: JOHN_LID,
+      senderAltIds: [JOHN_PN],
+      senderDisplayName: undefined,
+    });
+  });
+
+  it("does not treat the bot's own message as a quoted post, nor a quote without a mention", () => {
+    expect(parseRaw(msg({ text: '@55555555555555 4pm', mentioned: [BOT_LID], quotedParticipant: BOT_LID }), BOT_IDS)!.quoted).toBeUndefined();
+    expect(parseRaw(msg({ text: 'nice', quotedParticipant: JOHN_LID }), BOT_IDS)).toBeNull();
   });
 
   it('unwraps ephemeral (disappearing) messages', () => {

@@ -1,5 +1,5 @@
 import { getContentType, normalizeMessageContent, toNumber, type proto, type WAMessage } from 'baileys';
-import type { IncomingMessage, MentionedUser } from '../types.js';
+import type { IncomingMessage, MentionedUser, QuotedMessage } from '../types.js';
 import { isHandledChat, jidUser, normalizeJid, uniqueIds } from './jid.js';
 
 export interface ParticipantInfo {
@@ -20,6 +20,8 @@ export interface RawIncoming {
   mentionedJids: string[];
   quotedMessageId?: string;
   isReplyToBot: boolean;
+  /** Text and author of the quoted post, when it isn't the bot's. */
+  quoted?: { text: string; senderId: string };
   mentionsBot: boolean;
   timestamp: Date;
 }
@@ -55,25 +57,39 @@ export function parseRaw(msg: WAMessage, botIds: string[]): RawIncoming | null {
   const isReplyToBot = !!context?.stanzaId && !!quotedParticipant && bots.has(quotedParticipant);
   if (!mentionsBot && !isReplyToBot) return null;
 
+  // Tagging the bot under someone's post ("Remind us to meet at 7:30pm Friday") hands it that post.
+  let quoted: RawIncoming['quoted'];
+  if (!isReplyToBot && quotedParticipant && context?.quotedMessage) {
+    const q = textAndContext(context.quotedMessage);
+    if (q.text.trim()) {
+      quoted = { text: stripBot(q.text, botIds), senderId: quotedParticipant };
+      mentioned.push(...uniqueIds(q.context?.mentionedJid ?? []).filter((j) => !mentioned.includes(j)));
+    }
+  }
+
   const senderIds = uniqueIds([msg.key.participant, msg.key.participantAlt]);
   if (senderIds.length === 0) return null;
-
-  // Strip "@<bot>" tokens for every bot identity (phone number and LID).
-  let stripped = text;
-  for (const id of botIds) stripped = stripped.replaceAll(`@${jidUser(id)}`, ' ');
 
   return {
     messageId: msg.key.id ?? '',
     groupId,
     senderIds,
     pushName: msg.pushName ?? undefined,
-    text: stripped.replace(/\s+/g, ' ').trim(),
+    text: stripBot(text, botIds),
     mentionedJids: mentioned.filter((j) => !bots.has(j)),
     quotedMessageId: context?.stanzaId ?? undefined,
     isReplyToBot,
+    quoted,
     mentionsBot,
     timestamp: new Date(toNumber(msg.messageTimestamp) * 1000 || Date.now()),
   };
+}
+
+/** Removes "@<bot>" tokens for every bot identity (phone number and LID). */
+function stripBot(text: string, botIds: string[]): string {
+  let stripped = text;
+  for (const id of botIds) stripped = stripped.replaceAll(`@${jidUser(id)}`, ' ');
+  return stripped.replace(/\s+/g, ' ').trim();
 }
 
 function participantIds(p: ParticipantInfo): string[] {
@@ -101,6 +117,17 @@ export function toIncoming(raw: RawIncoming, participants: ParticipantInfo[]): I
     };
   });
 
+  let quoted: QuotedMessage | undefined;
+  if (raw.quoted) {
+    const author = findParticipant(participants, [raw.quoted.senderId]);
+    quoted = {
+      text: raw.quoted.text,
+      senderId: raw.quoted.senderId,
+      senderAltIds: author ? participantIds(author).filter((id) => id !== raw.quoted!.senderId) : [],
+      senderDisplayName: author?.notify ?? undefined,
+    };
+  }
+
   return {
     messageId: raw.messageId,
     groupId: raw.groupId,
@@ -112,6 +139,7 @@ export function toIncoming(raw: RawIncoming, participants: ParticipantInfo[]): I
     mentionedUsers,
     quotedMessageId: raw.quotedMessageId,
     isReplyToBot: raw.isReplyToBot,
+    quoted,
     mentionsBot: raw.mentionsBot,
     isFromAdmin: sender?.admin === 'admin' || sender?.admin === 'superadmin',
     timestamp: raw.timestamp,

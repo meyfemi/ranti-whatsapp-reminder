@@ -13,6 +13,8 @@ Ranti is a WhatsApp account you add to your existing groups (family, church, alu
 @Ranti set timezone to Europe/London
 ```
 
+Members can also tag it under an existing post instead of retyping it. Reply to "Remind us to meet by 7:30pm on Friday" with just `@Ranti`, or add details such as `@Ranti an hour before too`. The person who tags the bot sets the reminder, and "my birthday" in the post means the post's author.
+
 Every create, edit or cancel is echoed back, and the person who made the change can reply `undo` within 5 minutes. When a request is ambiguous, Ranti asks one short question instead of guessing.
 
 > [!WARNING]
@@ -95,6 +97,7 @@ Type messages as the current user and include `@ranti` to mention the bot. Menti
 | `/group church` | Switch to, or create, another group |
 | `/add` | Simulate the bot being added to the current group (posts the intro) |
 | `/reply undo` | Reply to the bot's last message without mentioning it |
+| `/replyto john @ranti` | Reply to john's last post in this group, tagging the bot so it reads that post |
 | `/users` | List simulated users |
 | `/clock` | Show the simulated time |
 | `/advance 2h` | Fast-forward (`90s`, `5m`, `2h`, `3d`, `1w`, or combined like `1d6h`). Every reminder due on the way fires at its own moment. |
@@ -230,6 +233,7 @@ docker logs -f ranti    # the pairing QR / code appears here on first run
   - `messageId`
   - `senderAltIds`, and `mentionedUsers` with LID and phone aliases
   - `mentionsBot` and `isReplyToBot`
+  - `quoted`: the post a message replies to, when the bot was tagged under someone else's message
 - **Parser action.** The parser has a `set_policy` action for "only admins can set reminders". Undo is handled without the LLM.
 
 ## Known limitations

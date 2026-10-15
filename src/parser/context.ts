@@ -28,10 +28,17 @@ export function buildUserContent(input: ParserInput): string {
       ? { pending_question: { question: input.pending.question, original_message: input.pending.originalText } }
       : {}),
   };
-  return `<context>\n${JSON.stringify(context, null, 2)}\n</context>\n\n<message>\n${input.text}\n</message>`;
+  const quoted = input.quoted
+    ? `<quoted_message author_id="${input.quoted.author.id}" author_name="${input.quoted.author.name.replace(/["<>]/g, '')}">\n${input.quoted.text}\n</quoted_message>\n\n`
+    : '';
+  return `<context>\n${JSON.stringify(context, null, 2)}\n</context>\n\n${quoted}<message>\n${input.text}\n</message>`;
 }
 
-/** IDs a `subject_user_id` may legitimately take: mentioned users (all known IDs) and the sender. */
+/** IDs a `subject_user_id` may legitimately take: mentioned users (all known IDs), the sender and the quoted post's author. */
 export function allowedSubjectIds(input: ParserInput): string[] {
-  return [input.sender.id, ...input.mentionedUsers.flatMap((u) => [u.id, ...(u.altIds ?? [])])];
+  return [
+    input.sender.id,
+    ...input.mentionedUsers.flatMap((u) => [u.id, ...(u.altIds ?? [])]),
+    ...(input.quoted ? [input.quoted.author.id] : []),
+  ];
 }

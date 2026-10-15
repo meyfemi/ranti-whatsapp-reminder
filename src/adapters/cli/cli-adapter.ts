@@ -1,5 +1,5 @@
 import { createInterface, type Interface } from 'node:readline';
-import type { ChatAdapter, IncomingMessage, Member, MentionedUser } from '../types.js';
+import type { ChatAdapter, IncomingMessage, Member, MentionedUser, QuotedMessage } from '../types.js';
 
 interface CliUser {
   name: string;
@@ -33,6 +33,8 @@ export class CliAdapter implements ChatAdapter {
   private currentUser: CliUser;
   private currentGroup = groupIdFor('family');
   private lastBotMessageId: string | undefined;
+  /** Each user's last message per group, keyed "<group> <userId>", for /replyto. */
+  private readonly lastPosts = new Map<string, { id: string; text: string }>();
   private seq = 0;
   private rl?: Interface;
   private readonly out: NodeJS.WritableStream;
@@ -144,6 +146,22 @@ export class CliAdapter implements ChatAdapter {
         await this.deliver(args.join(' '), true);
         return;
       }
+      case 'replyto': {
+        // Simulates replying to someone's post (usually with "@<bot>" to have the bot read it).
+        const [name, ...rest] = args;
+        const author = name ? this.users.get(name.toLowerCase()) : undefined;
+        if (!author) return this.print('Usage: /replyto <name> <text>\n');
+        const post = this.lastPosts.get(`${this.currentGroup} ${author.userId}`);
+        if (!post) return this.print(`${author.name} hasn't posted in this group yet.\n`);
+        const quoted: QuotedMessage = {
+          text: this.stripBot(post.text),
+          senderId: author.userId,
+          senderAltIds: [],
+          senderDisplayName: author.name,
+        };
+        await this.deliver(rest.join(' '), false, { id: post.id, quoted, mentionsFrom: post.text });
+        return;
+      }
       case 'users': {
         const lines = [...this.users.values()].map((u) => `  ${u.name}${u.isAdmin ? ' (admin)' : ''} = ${u.userId}`);
         return this.print(`${lines.join('\n')}\n`);
@@ -165,11 +183,14 @@ export class CliAdapter implements ChatAdapter {
     }
   }
 
-  private async deliver(text: string, isReply: boolean): Promise<void> {
-    const botToken = new RegExp(`@${escapeRegExp(this.opts.botName)}\\b`, 'gi');
-    const mentionsBot = botToken.test(text);
+  private async deliver(
+    text: string,
+    isReply: boolean,
+    replyTo?: { id: string; quoted: QuotedMessage; mentionsFrom: string },
+  ): Promise<void> {
+    const mentionsBot = this.botToken().test(text);
     const mentionedUsers: MentionedUser[] = [];
-    for (const match of text.matchAll(/@([A-Za-z][\w-]*)/g)) {
+    for (const match of `${text} ${replyTo?.mentionsFrom ?? ''}`.matchAll(/@([A-Za-z][\w-]*)/g)) {
       const name = match[1]!;
       if (name.toLowerCase() === this.opts.botName.toLowerCase()) continue;
       const user = this.users.get(name.toLowerCase());
@@ -177,22 +198,33 @@ export class CliAdapter implements ChatAdapter {
         mentionedUsers.push({ userId: user.userId, altUserIds: [], displayName: user.name });
       }
     }
+    const messageId = `cli-${++this.seq}`;
+    this.lastPosts.set(`${this.currentGroup} ${this.currentUser.userId}`, { id: messageId, text });
     const msg: IncomingMessage = {
-      messageId: `cli-${++this.seq}`,
+      messageId,
       groupId: this.currentGroup,
       senderId: this.currentUser.userId,
       senderAltIds: [],
       senderDisplayName: this.currentUser.name,
-      text: text.replace(botToken, '').replace(/\s+/g, ' ').trim(),
+      text: this.stripBot(text),
       mentionedUserIds: mentionedUsers.map((m) => m.userId),
       mentionedUsers,
-      quotedMessageId: isReply ? this.lastBotMessageId : undefined,
+      quotedMessageId: isReply ? this.lastBotMessageId : replyTo?.id,
       isReplyToBot: isReply,
+      quoted: replyTo?.quoted,
       mentionsBot,
       isFromAdmin: this.currentUser.isAdmin,
       timestamp: this.now(),
     };
     await this.messageHandler?.(msg);
+  }
+
+  private botToken(): RegExp {
+    return new RegExp(`@${escapeRegExp(this.opts.botName)}\\b`, 'gi');
+  }
+
+  private stripBot(text: string): string {
+    return text.replace(this.botToken(), '').replace(/\s+/g, ' ').trim();
   }
 
   private ensureUser(name: string, isAdmin?: boolean): CliUser {
@@ -230,6 +262,7 @@ export class CliAdapter implements ChatAdapter {
       '  /group <name>            switch to another group',
       '  /add                     simulate the bot being added to this group',
       '  /reply <text>            reply to the bot\'s last message (no mention needed)',
+      `  /replyto <name> <text>   reply to <name>'s last post, e.g. /replyto john @${this.opts.botName.toLowerCase()}`,
       '  /users                   list simulated users',
       ...extra,
       '  /quit                    exit',

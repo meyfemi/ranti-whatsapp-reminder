@@ -118,7 +118,7 @@ export function nextEventsText(events: UpcomingEvent[]): string {
     const head = `${sanitizeText(r.title)} (#${r.shortId}): ${when.charAt(0).toUpperCase()}${when.slice(1)}`;
     return r.rrule ? [head, `Next: ${formatDay(DateTime.fromJSDate(at).setZone(r.timezone))}`] : [head];
   });
-  if (lines.length === 1) return `${lines[0].join('\n')}.`;
+  if (lines.length === 1) return `${lines[0]!.join('\n')}.`;
   return lines.map(([head, ...rest]) => [`• ${head}`, ...rest.map((l) => `   ${l}`)].join('\n')).join('\n');
 }
 

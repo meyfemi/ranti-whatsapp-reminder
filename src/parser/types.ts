@@ -22,6 +22,8 @@ export interface ParserInput {
   now: Date;
   mentionedUsers: ParserMentionedUser[];
   activeReminders?: ParserReminderSummary[];
+  /** Someone's post the sender replied to while mentioning the bot; it usually holds the reminder. */
+  quoted?: { text: string; author: { id: string; name: string } };
   /** The clarifying question this message is probably answering. */
   pending?: { question: string; originalText: string };
 }
