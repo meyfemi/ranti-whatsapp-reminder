@@ -2,7 +2,7 @@ import { and, asc, eq, gt, lte, sql } from 'drizzle-orm';
 import { DateTime } from 'luxon';
 import type { ChatAdapter } from '../adapters/types.js';
 import type { Db } from '../db/client.js';
-import { getGroup, listActiveReminders, type DbOrTx } from '../db/repositories.js';
+import { countActiveReminders, getGroup, listActiveReminders, type DbOrTx } from '../db/repositories.js';
 import { digestRuns, groups, type DigestRun, type Group } from '../db/schema.js';
 import type { Logger } from '../logger.js';
 import { canChangeSettings } from '../reminders/permissions.js';
@@ -38,7 +38,9 @@ const HOUR = 3_600_000;
 type ScheduledRun = Pick<DigestRun, 'id' | 'fireAt' | 'slotLocal'>;
 
 /**
- * The weekly digest. The database is the source of truth: at most one pending run per group,
+ * The weekly digest: on by default, but only for groups with at least one active reminder (a
+ * group without any gets no run, and goes quiet again if all its reminders are cancelled).
+ * The database is the source of truth: at most one pending run per group,
  * claimed (pending -> sent) in a transaction with the send inside it, so duplicate jobs,
  * retries and the sweeper can't post a week twice. pg-boss only makes it punctual.
  */
@@ -88,13 +90,22 @@ export class DigestService {
     return ok({ group, next: run ? this.slotOf(run, group.timezone) : null });
   }
 
+  /** Gives the group a pending run if it should have one and doesn't (e.g. after its first reminder). */
+  async ensureFor(groupId: number, opts: { enqueue?: boolean } = {}): Promise<void> {
+    const [pending] = await this.db
+      .select({ id: digestRuns.id })
+      .from(digestRuns)
+      .where(and(eq(digestRuns.groupId, groupId), eq(digestRuns.status, 'pending')));
+    if (!pending) await this.reschedule(groupId, opts);
+  }
+
   /** Recomputes a group's pending run (after a timezone change, or the bot rejoining). */
-  async reschedule(groupId: number): Promise<void> {
+  async reschedule(groupId: number, opts: { enqueue?: boolean } = {}): Promise<void> {
     const run = await this.db.transaction(async (tx) => {
       const group = await getGroup(tx, groupId);
       return group ? this.scheduleInTx(tx, group) : undefined;
     });
-    await this.enqueue(run);
+    if (opts.enqueue ?? true) await this.enqueue(run);
   }
 
   /**
@@ -104,6 +115,7 @@ export class DigestService {
   private async scheduleInTx(tx: DbOrTx, group: Group, after: Date = this.clock.now()): Promise<ScheduledRun | undefined> {
     await tx.delete(digestRuns).where(and(eq(digestRuns.groupId, group.id), eq(digestRuns.status, 'pending')));
     if (!group.digestEnabled || !group.active) return undefined;
+    if ((await countActiveReminders(tx, group.id)) === 0) return undefined; // nothing to summarise, ever
     let slot = nextDigestSlot(group, after);
     for (let i = 0; i < 3; i++) {
       const [done] = await tx
@@ -142,6 +154,11 @@ export class DigestService {
         if (!run) return 'noop'; // already handled, or being handled by another worker
         const group = await getGroup(tx, run.groupId);
         if (!group || !group.active || !group.digestEnabled) {
+          await this.mark(tx, run.id, 'skipped');
+          return 'skipped';
+        }
+        if ((await countActiveReminders(tx, group.id)) === 0) {
+          // Every reminder was cancelled: go quiet until the group has one again (ensureFor).
           await this.mark(tx, run.id, 'skipped');
           return 'skipped';
         }
@@ -236,14 +253,9 @@ export class DigestService {
   /** Startup: gives every enabled group a pending run and re-enqueues future ones. */
   async ensureScheduled(): Promise<number> {
     const now = this.clock.now();
-    const enabled = await this.db.select().from(groups).where(and(eq(groups.digestEnabled, true), eq(groups.active, true)));
-    for (const group of enabled) {
-      const [pending] = await this.db
-        .select({ id: digestRuns.id })
-        .from(digestRuns)
-        .where(and(eq(digestRuns.groupId, group.id), eq(digestRuns.status, 'pending')));
-      if (!pending) await this.reschedule(group.id);
-    }
+    const enabled = await this.db.select({ id: groups.id }).from(groups).where(and(eq(groups.digestEnabled, true), eq(groups.active, true)));
+    // Created here without enqueueing: the loop below enqueues every future run once.
+    for (const group of enabled) await this.ensureFor(group.id, { enqueue: false });
     const future = await this.db
       .select()
       .from(digestRuns)

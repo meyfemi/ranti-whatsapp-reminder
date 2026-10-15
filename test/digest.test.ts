@@ -36,6 +36,8 @@ const setDigest = (over: Partial<Extract<ParsedCommand, { action: 'set_digest' }
 const create = (title: string, start_local: string, over: Partial<Extract<ParsedCommand, { action: 'create' }>> = {}): ParsedCommand => ({
   action: 'create', title, kind: 'event', start_local, rrule: null, offsets_minutes: [0], subject_user_id: null, message_style: null, ...over,
 });
+/** A reminder well outside the next weeks, so the group "has a reminder" without filling the digest. */
+const someReminder = () => say(create('Christmas party', '2026-12-24T18:00:00'));
 async function runs() {
   return env.handle.db.select().from(digestRuns).orderBy(digestRuns.id);
 }
@@ -55,15 +57,28 @@ describe('digest settings', () => {
     );
   });
 
-  it('turning it on schedules the next Monday 08:00 and echoes the schedule', async () => {
-    expect(await say(setDigest({ enabled: 'on' }))).toBe('Weekly digest is on: Mondays at 08:00 (Africa/Lagos). Next one: Mon 12 Oct.');
+  it('is on by default, but a group gets a digest only once it has a reminder', async () => {
+    expect(await say({ action: 'show_upcoming' }, BOB)).toMatch(/^📅 Nothing coming up/);
+    expect(await runs()).toHaveLength(0); // no reminders: nothing scheduled
+    await someReminder();
     const run = await pendingRun();
-    expect(run.fireAt.toISOString()).toBe('2026-10-12T07:00:00.000Z'); // jitter 0 in tests
+    expect(run.fireAt.toISOString()).toBe('2026-10-12T07:00:00.000Z'); // Mon 08:00 WAT, jitter 0 in tests
     expect(run.weekKey).toBe('2026-W42');
     expect(env.queue.enqueuedDigests.map((d) => d.runId)).toEqual([run.id]);
+    expect(await say(setDigest({ enabled: 'on' }))).toBe('Weekly digest is on: Mondays at 08:00 (Africa/Lagos). Next one: Mon 12 Oct.');
+  });
+
+  it('turning it on in a group with no reminders says it will start later', async () => {
+    expect(await say(setDigest({ enabled: 'on' }))).toBe(
+      "Weekly digest is on: Mondays at 08:00 (Africa/Lagos). I'll start once this group has a reminder.",
+    );
+    expect(await runs()).toHaveLength(0);
   });
 
   it('changing the day or time reschedules the pending run (and turns it on)', async () => {
+    await say(setDigest({ enabled: 'off' }));
+    await someReminder();
+    expect(await runs()).toHaveLength(0); // off: the reminder doesn't schedule one
     expect(await say(setDigest({ weekday: 'SU', time: '19:00' }))).toBe(
       'Weekly digest is on: Sundays at 19:00 (Africa/Lagos). Next one: Sun 11 Oct.',
     );
@@ -75,13 +90,14 @@ describe('digest settings', () => {
   });
 
   it('turning it off drops the pending run', async () => {
-    await say(setDigest({ enabled: 'on' }));
+    await someReminder();
+    await pendingRun();
     expect(await say(setDigest({ enabled: 'off' }))).toBe('Weekly digest is off. Turn it back on with "@Ranti turn on the weekly digest".');
     expect(await runs()).toHaveLength(0);
   });
 
   it('a timezone change moves the pending run to the same local time in the new zone', async () => {
-    await say(setDigest({ enabled: 'on' }));
+    await someReminder();
     await say({ action: 'set_timezone', timezone: 'Europe/London' });
     expect((await pendingRun()).fireAt.toISOString()).toBe('2026-10-12T07:00:00.000Z'); // 08:00 BST
     await say(setDigest({ weekday: 'MO' })); // still Mondays
@@ -92,6 +108,7 @@ describe('digest settings', () => {
   it('spreads sends over 0-15 minutes after the slot', async () => {
     const jittery = new DigestService(env.handle.db, env.adapter, env.queue, env.clock, silentLogger, { botName: 'Ranti', random: () => 0.5 });
     const { group } = await upsertGroup(env.handle.db, { platform: 'test', platformGroupId: 'group-1', defaultTimezone: 'Africa/Lagos' });
+    await someReminder();
     const actor = { group, member: { id: 0 } as never, isAdmin: true };
     await jittery.configure(actor, { enabled: true, weekday: null, time: null });
     expect((await pendingRun()).fireAt.toISOString()).toBe('2026-10-12T07:07:30.000Z');
@@ -102,7 +119,6 @@ describe('sending', () => {
   async function setUpWeek() {
     await say(create('Choir practice', '2026-10-15T18:00:00'));
     await say(create("Ada's birthday", '2026-10-14T06:00:00', { kind: 'birthday', rrule: 'FREQ=YEARLY' }));
-    await say(setDigest({ enabled: 'on' }));
     env.adapter.sent = [];
     return pendingRun();
   }
@@ -141,15 +157,40 @@ describe('sending', () => {
     expect((await pendingRun()).fireAt.toISOString()).toBe('2026-10-19T07:00:00.000Z');
   });
 
-  it('startup gives an enabled group a run if it has none', async () => {
-    await say(setDigest({ enabled: 'on' }));
+  it('startup gives a group with reminders a run if it has none, and none to groups without', async () => {
+    await someReminder();
+    await upsertGroup(env.handle.db, { platform: 'test', platformGroupId: 'group-quiet', defaultTimezone: 'Africa/Lagos' });
     await env.handle.db.delete(digestRuns);
     await env.recovery.runStartup();
-    expect((await pendingRun()).fireAt.toISOString()).toBe('2026-10-12T07:00:00.000Z');
+    const all = await runs();
+    expect(all).toHaveLength(1);
+    expect(all[0]!.fireAt.toISOString()).toBe('2026-10-12T07:00:00.000Z');
+  });
+
+  it('a group whose reminders were all cancelled goes quiet until it has one again', async () => {
+    await someReminder();
+    const run = await pendingRun();
+    await say({ action: 'cancel', target: { short_id: 1, description: null } });
+    env.adapter.sent = [];
+    env.clock.set(run.fireAt);
+    expect(await env.digests.send(run.id)).toBe('skipped');
+    expect(env.adapter.sent).toHaveLength(0);
+    expect((await runs()).filter((r) => r.status === 'pending')).toHaveLength(0); // dormant, no weekly rows
+    await say(create('Picnic', '2026-10-24T12:00:00'));
+    expect((await pendingRun()).fireAt.toISOString()).toBe('2026-10-19T07:00:00.000Z');
+  });
+
+  it('a group with no reminders never gets the "nothing scheduled" note', async () => {
+    await say(setDigest({ empty_weeks: 'post' }));
+    env.clock.set(new Date('2026-11-01T00:00:00Z'));
+    await env.recovery.runStartup();
+    await env.recovery.sweepDue();
+    expect(digestPosts()).toHaveLength(0);
+    expect(await runs()).toHaveLength(0);
   });
 
   it('an empty week posts nothing by default, or a short note if asked', async () => {
-    await say(setDigest({ enabled: 'on' }));
+    await someReminder();
     env.adapter.sent = [];
     let run = await pendingRun();
     env.clock.set(run.fireAt);

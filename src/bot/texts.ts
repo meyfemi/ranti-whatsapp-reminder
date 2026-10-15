@@ -21,7 +21,7 @@ export function introText(botName: string, timezone: string, now: Date): string 
     `• ${at} every first Saturday remind us to pay dues at 9am`,
     `• ${at} what reminders do we have?`,
     `Cancel with "${at} cancel #2". Times are in ${tzLabel(timezone, now)}; change it with "${at} set timezone to Europe/London".`,
-    `Admins can turn on a weekly summary: "${at} turn on the weekly digest".`,
+    `Each Monday I'll post the week ahead; admins can stop it with "${at} turn off the weekly digest".`,
   ].join('\n');
 }
 
@@ -39,7 +39,7 @@ export function helpText(botName: string, timezone: string, now: Date): string {
     `• Coming up: "${at} what's coming up this week?"`,
     `• Change: "${at} move #3 to 5pm" · Cancel: "${at} cancel #3"`,
     `• Reply "undo" to my confirmation within ${UNDO_MINUTES} minutes to undo it.`,
-    `Admins: "${at} only admins can set reminders" · "${at} we write dates month first" · "${at} turn on the weekly digest" (or "send the digest on Sundays at 7pm"). Timezone: ${tzLabel(timezone, now)}; change with "${at} set timezone to Europe/London".`,
+    `Admins: "${at} only admins can set reminders" · "${at} we write dates month first" · "${at} turn off the weekly digest" (or "send the digest on Sundays at 7pm"). Timezone: ${tzLabel(timezone, now)}; change with "${at} set timezone to Europe/London".`,
   ].join('\n');
 }
 
@@ -134,10 +134,10 @@ export function noMatchText(kind: Reminder['kind'] | null, subject: 'you' | 'the
   return `I couldn't find a matching ${what}.`;
 }
 
-/** Echo after changing the weekly digest. */
+/** Echo after changing the weekly digest. No next run while on means the group has no reminders yet. */
 export function digestConfirmation(group: Group, next: DateTime | null, botName: string): string {
   if (!group.digestEnabled) return `Weekly digest is off. Turn it back on with "@${botName} turn on the weekly digest".`;
-  const nextText = next ? ` Next one: ${formatDay(next)}.` : '';
+  const nextText = next ? ` Next one: ${formatDay(next)}.` : " I'll start once this group has a reminder.";
   const empty = group.digestPostEmpty ? ' In a week with nothing on, I\'ll say so.' : '';
   return `Weekly digest is on: ${describeSchedule(group)}.${nextText}${empty}`;
 }

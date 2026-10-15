@@ -35,7 +35,7 @@ Every create, edit or cancel is echoed back, and the person who made the change 
 
 ### Weekly digest
 
-An opt-in weekly summary of the next 7 days, posted into the group:
+A weekly summary of the next 7 days, posted into the group. It is on by default, but a group only gets it once it has at least one active reminder:
 
 ```
 📅 This week in Family Group (13–19 Oct)
@@ -48,10 +48,11 @@ Sat 18 – Pay monthly dues, 09:00
 Have a great week!
 ```
 
-- **Settings (admins only):** `@Ranti turn on the weekly digest`, `@Ranti turn off the digest`, `@Ranti send the digest on Sundays at 7pm` (a day or time on its own also turns it on), `@Ranti send the digest even when nothing is coming up`. The default is off, Mondays at 08:00 in the group timezone. Each change is echoed, e.g. `Weekly digest is on: Sundays at 19:00 (Africa/Lagos). Next one: Sun 18 Oct.`
+- **Settings (admins only):** `@Ranti turn on the weekly digest`, `@Ranti turn off the digest`, `@Ranti send the digest on Sundays at 7pm` (a day or time on its own also turns it on), `@Ranti send the digest even when nothing is coming up`. The default is on, Mondays at 08:00 in the group timezone. Each change is echoed, e.g. `Weekly digest is on: Sundays at 19:00 (Africa/Lagos). Next one: Sun 18 Oct.`
 - **On demand:** anyone can ask `@Ranti what's coming up?` for the same summary of the next 7 days, whether or not the digest is on.
 - **Content:** every active reminder's main time (not its early reminders) in the 7 local days from the send day, expanded from its rule in the group timezone (DST and 29 February as for normal reminders). Grouped by day, with birthdays and anniversaries first, at most 20 lines. Names are plain text, so the digest never notifies anyone; the birthday wish on the day still tags the person. Timed items that have already passed by send time are left out, but today's birthdays stay in.
-- **Empty weeks** are skipped unless the group asked for a "Nothing scheduled this week" post.
+- **Only groups with reminders.** A group with no active reminders gets no digest and no scheduled run. Its first reminder (or birthday list, or an undone cancel) schedules the next one. If every reminder is later cancelled, the next digest is skipped and the group goes quiet until it has a reminder again.
+- **Empty weeks** (a group with reminders, none in the next 7 days) are skipped unless the group asked for a "Nothing scheduled this week" post.
 - **Delivery** follows the reminder pattern: the next send is a row in `digest_runs` with a pg-boss job, claimed before sending, so it can't post twice. Sends are spread over 0–15 minutes after the set time. A digest less than 6 hours late after downtime is still sent; an older one is skipped and next week's is scheduled. There is at most one digest per group per ISO week.
 
 > [!WARNING]
@@ -251,6 +252,7 @@ docker logs -f ranti    # the pairing QR / code appears here on first run
 - Outgoing messages are rate limited globally and per group. They are queued, not dropped.
 - Inbound bot-directed messages are capped per group, guarding against mention spam and LLM cost.
 - Nothing echoed back can mention anyone. User text is sanitised (no `@`, control or zero-width characters), and the only person a reminder ever mentions is its subject.
+- The weekly digest is on by default, so it is the one post nobody asked for. It goes only to groups that have reminders, at most once a week, spread over 15 minutes, and the intro tells admins how to turn it off.
 - The socket does not mark itself online on connect, and the intro is posted at most once per group per 10 minutes.
 
 ## Design notes

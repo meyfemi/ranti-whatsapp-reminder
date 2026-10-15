@@ -30,8 +30,8 @@ export const groups = pgTable(
     timezone: text('timezone').notNull().default('Africa/Lagos'),
     creationPolicy: creationPolicy('creation_policy').notNull().default('anyone'),
     dateFormat: dateFormat('date_format').notNull().default('DMY'),
-    /** Weekly digest: off unless an admin turns it on. */
-    digestEnabled: boolean('digest_enabled').notNull().default(false),
+    /** Weekly digest: on by default; only sent to groups with at least one active reminder. */
+    digestEnabled: boolean('digest_enabled').notNull().default(true),
     /** ISO weekday the digest goes out on: 1 = Monday ... 7 = Sunday. */
     digestWeekday: integer('digest_weekday').notNull().default(1),
     /** Local time ("HH:mm", group timezone) the digest goes out at. */

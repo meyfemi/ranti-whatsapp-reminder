@@ -373,6 +373,7 @@ export class Bot {
     if (!result.ok) return this.reply(msg, result.error);
 
     const { reminder, occurrences } = result.value;
+    await this.digests.ensureFor(actor.group.id); // a group's first reminder starts its weekly digest
     await this.openUndoWindow(actor, { op: 'create', reminderId: reminder.id });
     const nextEvent = nextEventOf(occurrences);
     const subjectName = subject?.lastKnownDisplayName ?? (subject ? 'them' : null);
@@ -493,6 +494,7 @@ export class Bot {
       const res = await this.reminders.importBirthdays(actor, entries);
       if (!res.ok) return this.reply(msg, res.error);
       await deleteInteraction(this.db, pending.id);
+      await this.digests.ensureFor(actor.group.id);
       const n = res.value.created.length;
       const skipped = res.value.skipped.length
         ? ` (${res.value.skipped.map((e) => sanitizeText(e.name, 40)).join(', ')} ${res.value.skipped.length === 1 ? 'was' : 'were'} already saved.)`
@@ -615,6 +617,7 @@ export class Bot {
       }
       case 'cancel': {
         const r = await this.reminders.reactivate(actor, payload.reminderId);
+        if (r.ok) await this.digests.ensureFor(actor.group.id);
         return this.reply(msg, r.ok ? `Undone: #${r.value.reminder.shortId} ${sanitizeText(r.value.reminder.title)} is back on.` : r.error);
       }
       case 'edit': {

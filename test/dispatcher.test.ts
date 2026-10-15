@@ -187,9 +187,11 @@ describe('Recovery', () => {
   it('startup re-enqueues future pending occurrences', async () => {
     await createMeeting();
     env.queue.enqueued.length = 0;
+    env.queue.enqueuedDigests.length = 0;
     const { requeued } = await env.recovery.runStartup();
-    expect(requeued).toBe(2);
+    expect(requeued).toBe(3); // two occurrences, plus the group's weekly digest (on by default)
     expect(env.queue.enqueued).toHaveLength(2);
+    expect(env.queue.enqueuedDigests).toHaveLength(1);
   });
 
   it('delivers on time without a late note via the sweeper', async () => {
