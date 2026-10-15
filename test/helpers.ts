@@ -112,7 +112,7 @@ export async function makeActor(
 
 // ---------------------------------------------------------------- bot helpers
 
-import { Bot } from '../src/bot/bot.js';
+import { Bot, type BotOptions } from '../src/bot/bot.js';
 import type { ParsedCommand } from '../src/parser/schema.js';
 import { ParserUnavailableError, type Parser, type ParserInput } from '../src/parser/types.js';
 
@@ -129,11 +129,12 @@ export class ScriptedParser implements Parser {
   }
 }
 
-export function makeBot(env: TestEnv, parser: Parser): Bot {
+export function makeBot(env: TestEnv, parser: Parser, opts: Partial<BotOptions> = {}): Bot {
   const bot = new Bot(env.handle.db, env.adapter, parser, env.service, env.clock, silentLogger, {
     platform: 'test',
     botName: 'Ranti',
     defaultTimezone: 'Africa/Lagos',
+    ...opts,
   });
   bot.attach();
   return bot;

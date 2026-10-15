@@ -18,6 +18,9 @@ export interface CreateReminderInput {
   offsetsMinutes: number[];
   subjectMemberId: number | null;
   messageStyle: string | null;
+  /** Name of a person who isn't linked to a member (wished by name, without a mention). */
+  subjectName?: string | null;
+  birthYear?: number | null;
 }
 
 export type ServiceResult<T> = { ok: true; value: T } | { ok: false; error: string };

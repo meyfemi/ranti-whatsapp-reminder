@@ -19,6 +19,8 @@ export interface ParserInput {
   text: string;
   sender: { id: string; name: string };
   timezone: string;
+  /** How the group writes numeric dates (default DMY). */
+  dateFormat?: 'DMY' | 'MDY';
   now: Date;
   mentionedUsers: ParserMentionedUser[];
   activeReminders?: ParserReminderSummary[];

@@ -36,6 +36,8 @@ export class CliAdapter implements ChatAdapter {
   /** Each user's last message per group, keyed "<group> <userId>", for /replyto. */
   private readonly lastPosts = new Map<string, { id: string; text: string }>();
   private seq = 0;
+  /** Lines collected between /paste and /end, sent as one multi-line message. */
+  private pasteBuffer: string[] | null = null;
   private rl?: Interface;
   private readonly out: NodeJS.WritableStream;
   private readonly now: () => Date;
@@ -104,6 +106,16 @@ export class CliAdapter implements ChatAdapter {
   /** Processes one REPL line. Public so tests can drive the simulator directly. */
   async handleLine(raw: string): Promise<void> {
     const line = raw.trim();
+    if (this.pasteBuffer) {
+      if (line.toLowerCase() !== '/end') {
+        if (line) this.pasteBuffer.push(line);
+        return;
+      }
+      const text = this.pasteBuffer.join('\n');
+      this.pasteBuffer = null;
+      if (text) await this.deliver(text, false);
+      return;
+    }
     if (!line) return;
     if (line.startsWith('/')) {
       await this.handleCommand(line);
@@ -140,6 +152,10 @@ export class CliAdapter implements ChatAdapter {
         // Simulates someone adding the bot to the current group.
         await this.addedHandler?.(this.currentGroup);
         return;
+      }
+      case 'paste': {
+        this.pasteBuffer = [];
+        return this.print('Pasting: type or paste lines, then /end to send them as one message.\n');
       }
       case 'reply': {
         if (!this.lastBotMessageId) return this.print('The bot has not said anything yet.\n');
@@ -224,7 +240,12 @@ export class CliAdapter implements ChatAdapter {
   }
 
   private stripBot(text: string): string {
-    return text.replace(this.botToken(), '').replace(/\s+/g, ' ').trim();
+    return text
+      .replace(this.botToken(), '')
+      .split('\n')
+      .map((l) => l.replace(/\s+/g, ' ').trim())
+      .filter(Boolean)
+      .join('\n');
   }
 
   private ensureUser(name: string, isAdmin?: boolean): CliUser {
@@ -262,6 +283,7 @@ export class CliAdapter implements ChatAdapter {
       '  /group <name>            switch to another group',
       '  /add                     simulate the bot being added to this group',
       '  /reply <text>            reply to the bot\'s last message (no mention needed)',
+      '  /paste ... /end          send several lines as one message (e.g. a birthday list)',
       `  /replyto <name> <text>   reply to <name>'s last post, e.g. /replyto john @${this.opts.botName.toLowerCase()}`,
       '  /users                   list simulated users',
       ...extra,

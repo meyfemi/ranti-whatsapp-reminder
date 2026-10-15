@@ -71,6 +71,7 @@ export async function createApp(opts: AppOptions): Promise<App> {
     platform: opts.platform,
     botName: config.BOT_NAME,
     defaultTimezone: config.DEFAULT_TIMEZONE,
+    maxBulkEntries: config.BULK_IMPORT_MAX_ENTRIES,
   });
   bot.attach();
 

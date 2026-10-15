@@ -18,6 +18,8 @@ const ConfigSchema = z.object({
   BOT_NAME: z.string().min(1).default('Ranti'),
   DEFAULT_TIMEZONE: z.string().default('Africa/Lagos'),
   MAX_ACTIVE_REMINDERS_PER_GROUP: z.coerce.number().int().positive().default(50),
+  /** Most birthdays accepted in one pasted list. */
+  BULK_IMPORT_MAX_ENTRIES: z.coerce.number().int().positive().default(100),
   ANTHROPIC_API_KEY: optionalString,
   PARSER_MODEL: z.string().default('claude-haiku-5-5'),
   LLM_GREETINGS: boolFromEnv,

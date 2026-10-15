@@ -29,12 +29,14 @@ export function helpText(botName: string, timezone: string, now: Date): string {
     `I post reminders in this group. Mention me with what you need:`,
     `• Create: "${at} remind us about choir practice Saturday 4pm, 30 min before too"`,
     `• Birthdays: "${at} 12 Oct is @John's birthday"`,
+    `• A list: "${at} add these birthdays:" then one per line, e.g. "John - 12 Oct". I'll show a preview first.`,
+    `• Link a listed name to a member: "${at} link John to @John"`,
     `• Repeat: "${at} every Monday at 6am remind us to send reports"`,
     `• List: "${at} what reminders do we have?"`,
     `• Ask: "${at} anything on this week?" · "${at} when is my birthday?"`,
     `• Change: "${at} move #3 to 5pm" · Cancel: "${at} cancel #3"`,
     `• Reply "undo" to my confirmation within ${UNDO_MINUTES} minutes to undo it.`,
-    `Admins: "${at} only admins can set reminders". Timezone: ${tzLabel(timezone, now)}; change with "${at} set timezone to Europe/London".`,
+    `Admins: "${at} only admins can set reminders" · "${at} we write dates month first". Timezone: ${tzLabel(timezone, now)}; change with "${at} set timezone to Europe/London".`,
   ].join('\n');
 }
 

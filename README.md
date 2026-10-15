@@ -11,11 +11,25 @@ Ranti is a WhatsApp account you add to your existing groups (family, church, alu
 @Ranti when is my birthday?
 @Ranti cancel #4
 @Ranti set timezone to Europe/London
+@Ranti add these birthdays:
+John - 12 Oct
+@Ada 3 March
+Mama Bisi – 5th of June
 ```
 
 Members can also tag it under an existing post instead of retyping it. Reply to "Remind us to meet by 7:30pm on Friday" with just `@Ranti`, or add details such as `@Ranti an hour before too`. The person who tags the bot sets the reminder, and "my birthday" in the post means the post's author.
 
 Every create, edit or cancel is echoed back, and the person who made the change can reply `undo` within 5 minutes. When a request is ambiguous, Ranti asks one short question instead of guessing.
+
+### Pasting a birthday list
+
+`@Ranti add these birthdays:` followed by one person per line saves many birthdays at once. Ranti replies with a numbered preview first and saves nothing until the person who pasted the list confirms.
+
+- **Replies to the preview** (as WhatsApp replies to that message): `yes`, `no`, `remove 3` (or `remove 2, 5`), `fix 2: 4 March`, `fix 2: Mama Bisi` or `fix 2: @Ada`. Each edit re-posts the preview. The preview expires after 30 minutes, and only the person who pasted the list can confirm or edit it.
+- **Dates** can be written `12 Oct`, `October 12`, `5th of June`, `12/10` or `12-10-1990`. The preview shows month names, so a mix-up is easy to spot. Numeric dates follow the group's date format, which is day first (`03/04` = 3 April) unless an admin says `@Ranti we write dates month first`. A number above 12 is always the day. A year is stored but never announced. Lines Ranti can't read are listed under "Couldn't read" and never guessed.
+- **People.** A line with an @mention is linked to that member. A plain name is linked only if exactly one known member has exactly that display name, shown as "(matched to member John)". Otherwise the birthday is saved by name and the wish uses the name without a mention. `@Ranti link John to @John` (the creator or an admin) links it later. When someone adds their own birthday and a by-name birthday on that date matches their name, Ranti asks whether it's theirs instead of saving a duplicate.
+- **Duplicates** are skipped: the same member, or the same name on the same date, whether already saved or listed twice.
+- **Limits.** Up to 100 birthdays per list (`BULK_IMPORT_MAX_ENTRIES`). If the list would pass the group's reminder cap, the preview says how many fit and `save N` saves the first N. Saving is all-or-nothing, through the same path as a single birthday (yearly, at 06:00). Long previews are split into numbered parts.
 
 > [!WARNING]
 > **Ranti uses an unofficial WhatsApp client.** It connects through [Baileys](https://github.com/WhiskeySockets/Baileys), which speaks the WhatsApp Web multi-device protocol as a linked device of a normal WhatsApp account. This is not the WhatsApp Business API and is not endorsed by WhatsApp or Meta. **The account can be restricted or banned at any time, without warning.** Use a dedicated phone number you can afford to lose, never your personal number. Ranti is built to look and behave like a polite human participant (see [Ban-risk measures](#ban-risk-measures)), but that reduces risk; it does not remove it.
@@ -46,7 +60,7 @@ WhatsApp ──► adapters/whatsapp ──► bot ──► parser (LLM → JSO
 pg-boss job / sweeper ──► dispatcher (idempotent send) ◄── scheduler (rrule + luxon) ◄┘
 ```
 
-- **The LLM is only a parser.** It turns one message into one structured command, using structured outputs so the reply is always JSON. A second zod layer then checks every field (dates, RRULEs, timezones, that a mentioned person really was mentioned). Dates, recurrence maths, scheduling and permission checks are all deterministic code.
+- **The LLM is only a parser.** It turns one message into one structured command by calling one of a set of strict tools, one per action, so the reply always fits a schema. A second zod layer then checks every field (dates, RRULEs, timezones, that a mentioned person really was mentioned). Dates, recurrence maths, scheduling and permission checks are all deterministic code.
 - **The database is the source of truth.** Each reminder stores only its *next* occurrence per offset. pg-boss jobs make delivery punctual, and a sweeper delivers anything a job misses.
 - **Dispatch is idempotent.** An occurrence row is locked and moved from `pending` to `sent` in one transaction, with the send inside it. Duplicate jobs, retries and the sweeper cannot double-post.
 
@@ -97,6 +111,7 @@ Type messages as the current user and include `@ranti` to mention the bot. Menti
 | `/group church` | Switch to, or create, another group |
 | `/add` | Simulate the bot being added to the current group (posts the intro) |
 | `/reply undo` | Reply to the bot's last message without mentioning it |
+| `/paste` … `/end` | Send the lines in between as one multi-line message, e.g. a birthday list |
 | `/replyto john @ranti` | Reply to john's last post in this group, tagging the bot so it reads that post |
 | `/users` | List simulated users |
 | `/clock` | Show the simulated time |
@@ -150,6 +165,7 @@ All configuration is via environment variables (see `.env.example`). Nothing sec
 | `BOT_NAME` | `Ranti` | Name used in intro and help text |
 | `DEFAULT_TIMEZONE` | `Africa/Lagos` | Timezone for new groups |
 | `MAX_ACTIVE_REMINDERS_PER_GROUP` | `50` | Cap on active reminders per group |
+| `BULK_IMPORT_MAX_ENTRIES` | `100` | Most birthdays accepted in one pasted list |
 | `WA_SESSION_NAME` | `default` | Name of the WhatsApp session stored in Postgres |
 | `WA_PAIRING_PHONE` | unset | Use pairing-code login for this number instead of QR |
 | `RATE_LIMIT_GLOBAL_PER_MINUTE` | `20` | Max outgoing messages per minute, all groups |
@@ -174,15 +190,16 @@ The test run drops and re-migrates the `ranti_test` schema, then runs DB-backed 
 - **Recurrence:** DST gaps and overlaps, Feb 29 to Feb 28, "first Saturday", offsets.
 - **Dispatcher:** idempotency under concurrent duplicates, retries, recovery.
 - **Commands:** permissions, caps, undo.
+- **Birthday lists:** date reading (DMY/MDY, 29 Feb), mention-to-member mapping for JIDs and LIDs, exact-name matching, duplicates, preview edits, the cap, all-or-nothing saves, linking, and a CLI scenario from paste to wish.
 - **WhatsApp adapter:** mention and LID handling, the auth store, rate limits and reconnect policy.
 
-The parser fixtures in `src/parser/fixtures.ts` hold 31 example messages with expected commands. They run against the real API only when asked:
+The parser fixtures in `src/parser/fixtures.ts` hold 56 example messages with expected commands. They run against the real API only when asked:
 
 ```bash
 RUN_LLM_TESTS=1 ANTHROPIC_API_KEY=... pnpm vitest run src/parser
 ```
 
-Results are compared by meaning. Wording may differ, and schedules are compared by their computed fire times.
+Results are compared by meaning. Wording may differ, schedules are compared by their computed fire times, and birthday lists by what the import would save.
 
 ## Deployment
 
@@ -218,7 +235,9 @@ docker logs -f ranti    # the pairing QR / code appears here on first run
 - **Recurrence.** rrule expands rules in the group's local "floating" time, and luxon converts each local time to UTC, so 09:00 stays 09:00 across DST changes. A local time that doesn't exist (spring-forward gap) moves forward an hour. Yearly 29 February rules fire on 28 February in non-leap years.
 - **Changing a group's timezone** keeps every reminder's local wall-clock time. A 09:00 reminder stays at 09:00 in the new zone, and all pending occurrences are recomputed.
 - **Members** are stored by the stable platform ID WhatsApp gives first, phone-number JID or LID, plus all known aliases. Lookups match any of them, and display names are never used to identify anyone.
-- **Undo windows and clarifying questions** live in `pending_interactions`, tied to the member and group, and expire after 5 and 10 minutes.
+- **Undo windows and clarifying questions** live in `pending_interactions`, tied to the member and group, and expire after 5 and 10 minutes. Birthday-list previews live there too, for 30 minutes.
+- **Parser tools, not one response schema.** Structured outputs compile the schema into a grammar, and a single union of every command outgrew the API's limits (grammar size, and at most 16 nullable or union-typed fields across the whole schema). Each action is now its own strict tool, and fields that may be empty use an empty value (`""`, `0`, `[]` or `none`) rather than `null`. `src/parser/tools.ts` turns those back into `null` before the usual zod validation, so the rest of the code is unchanged.
+- **Birthdays by name.** A birthday from a list can have `subject_name` and no member. The wish then uses the name as plain text. `birth_year` is stored when given and never shown in wishes.
 
 ### Where this differs from the original brief
 
@@ -238,7 +257,8 @@ docker logs -f ranti    # the pairing QR / code appears here on first run
 
 ## Known limitations
 
-- **One command per message.** If a message asks for several reminders, only the first is created.
+- **One command per message.** If a message asks for several reminders, only the first is created. Birthday lists are the exception.
+- **Name matching is narrow.** A plain name in a birthday list is matched only to members Ranti has already seen (they wrote to it or were mentioned), and only by exact display name. Everyone else is saved by name until linked.
 - **Event-relative wording.** Early-reminder offsets are minutes before the event. "The evening before" has to be expressed as an offset, e.g. 15 hours before.
 - **Months without the day.** Monthly rules on the 29th–31st skip months that lack that day, as in RFC 5545. Use "last day of the month" for month-end.
 - **Mention rendering.** Mentions render as names in WhatsApp clients, but in text they are numbers (`@2348...`). Reminders store the person, not the name.

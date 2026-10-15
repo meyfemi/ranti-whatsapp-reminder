@@ -1,7 +1,7 @@
 import { and, asc, eq, lte } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { occurrences } from '../db/schema.js';
-import type { OffsetClock } from './clock.js';
+import type { Clock } from './clock.js';
 import type { OccurrenceDispatcher } from './recovery.js';
 
 /**
@@ -10,7 +10,7 @@ import type { OccurrenceDispatcher } from './recovery.js';
  */
 export async function fastForward(
   db: Db,
-  clock: OffsetClock,
+  clock: Clock & { set(to: Date): void },
   dispatcher: OccurrenceDispatcher,
   target: Date,
   maxSteps = 1000,

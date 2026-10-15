@@ -14,6 +14,8 @@ const reminder = (over: Partial<Reminder>): Reminder => ({
   timezone: 'Africa/Lagos',
   offsetsMinutes: [0],
   subjectMemberId: null,
+  subjectName: null,
+  birthYear: null,
   messageStyle: null,
   createdByMemberId: 1,
   active: true,

@@ -66,6 +66,12 @@ describe('jid helpers', () => {
 });
 
 describe('parseRaw', () => {
+  it('keeps line breaks so a pasted list stays one entry per line', () => {
+    const r = parseRaw(msg({ text: `@55555555555555 add these birthdays:\n  John  -  12 Oct\n\n@22222222222222 3 March  `, mentioned: [BOT_LID, JOHN_LID] }), BOT_IDS);
+    expect(r!.text).toBe('add these birthdays:\nJohn - 12 Oct\n@22222222222222 3 March');
+    expect(r!.mentionedJids).toEqual([JOHN_LID]);
+  });
+
   it('detects a mention of the bot by LID via contextInfo, and strips it from the text', () => {
     const raw = parseRaw(msg({ text: '@55555555555555 remind us at 5pm', mentioned: [BOT_LID] }), BOT_IDS)!;
     expect(raw.mentionsBot).toBe(true);

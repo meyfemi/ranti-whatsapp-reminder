@@ -16,6 +16,7 @@ export function buildUserContent(input: ParserInput): string {
   const context = {
     now_local: now.toFormat("cccc yyyy-MM-dd'T'HH:mm"),
     timezone: input.timezone,
+    date_format: input.dateFormat ?? 'DMY',
     sender: input.sender,
     mentioned_users: input.mentionedUsers.map((u) => ({ id: u.id, token: u.token, name: u.name ?? null })),
     active_reminders: (input.activeReminders ?? []).map((r) => ({

@@ -1,6 +1,7 @@
 import type { ParsedCommand } from './schema.js';
 import type { ParserInput, ParserMentionedUser } from './types.js';
 import { nextEventAfter, upcomingEvents } from '../scheduler/recurrence.js';
+import { buildImport, normaliseName, type BulkContext } from '../reminders/bulk.js';
 
 /**
  * Example messages with expected parser output. Used by:
@@ -24,6 +25,7 @@ export const SENDER = { id: '2348000000001@s.whatsapp.net', name: 'Alice' };
 const JOHN: ParserMentionedUser = { id: '2348011111111@s.whatsapp.net', token: '@2348011111111', name: 'John' };
 const MARY: ParserMentionedUser = { id: '99887766554433@lid', token: '@99887766554433', name: 'Mary' };
 const BOLA: ParserMentionedUser = { id: '2348022222222@s.whatsapp.net', token: '@2348022222222', name: 'Bola' };
+const ADA: ParserMentionedUser = { id: '55443322110099@lid', token: '@55443322110099', name: 'Ada' };
 
 const TUNDE = { id: '2348033333333@s.whatsapp.net', name: 'Tunde' }; // author of a quoted post
 const WED = '2026-10-07T10:00:00+01:00'; // Wednesday 7 Oct 2026, 10:00 WAT
@@ -33,6 +35,11 @@ const create = (c: Omit<Extract<ParsedCommand, { action: 'create' }>, 'action'>)
 const query = (c: Partial<Omit<Extract<ParsedCommand, { action: 'query' }>, 'action'>>): ParsedCommand => ({
   action: 'query', from_date: null, to_date: null, short_ids: [], subject_user_id: null, kind: null, no_match: false, ...c,
 });
+type BulkEntryFixture = Extract<ParsedCommand, { action: 'bulk_add_birthdays' }>['entries'][number];
+const line = (raw_line: string, name_text: string | null, month: number, day: number, extra: Partial<BulkEntryFixture> = {}): BulkEntryFixture => ({
+  raw_line, name_text, mention_user_id: null, month, day, year: null, ...extra,
+});
+const bulk = (entries: BulkEntryFixture[], unparsed: string[] = []): ParsedCommand => ({ action: 'bulk_add_birthdays', entries, unparsed });
 const noChanges = { title: null, start_local: null, rrule: null, make_one_off: false, offsets_minutes: null, message_style: null };
 
 export const FIXTURES: Fixture[] = [
@@ -342,6 +349,122 @@ export const FIXTURES: Fixture[] = [
       offsets_minutes: [0], subject_user_id: null, message_style: null,
     }),
   },
+  // ------------------------------------------------------------ bulk birthday lists
+  {
+    name: 'bulk: the example list (mixed formats, a mention, an unreadable line)',
+    input: {
+      now: WED, mentionedUsers: [ADA],
+      text: `add these birthdays:\nJohn - 12 Oct\n${ADA.token} 3 March\nTunde 21/07\nMama Bisi – 5th of June\nChidi: 29 Feb\nUncle T sometime in May`,
+    },
+    expected: bulk(
+      [
+        line('John - 12 Oct', 'John', 10, 12),
+        line(`${ADA.token} 3 March`, null, 3, 3, { mention_user_id: ADA.id }),
+        line('Tunde 21/07', 'Tunde', 7, 21),
+        line('Mama Bisi – 5th of June', 'Mama Bisi', 6, 5),
+        line('Chidi: 29 Feb', 'Chidi', 2, 29),
+      ],
+      ['Uncle T sometime in May'],
+    ),
+  },
+  {
+    name: 'bulk: month-first wording ("October 12", "Jan 3rd")',
+    input: { now: WED, text: 'please save these birthdays\nKemi October 12\nSegun Jan 3rd\nFunmi - December 25' },
+    expected: bulk([line('Kemi October 12', 'Kemi', 10, 12), line('Segun Jan 3rd', 'Segun', 1, 3), line('Funmi - December 25', 'Funmi', 12, 25)]),
+  },
+  {
+    name: 'bulk: numeric dates read day-first (DMY group)',
+    input: { now: WED, text: 'birthdays:\nAda 03/04\nObi 12/10\nZainab 25/12' },
+    expected: bulk([line('Ada 03/04', 'Ada', 4, 3), line('Obi 12/10', 'Obi', 10, 12), line('Zainab 25/12', 'Zainab', 12, 25)]),
+  },
+  {
+    name: 'bulk: numeric dates read month-first (MDY group)',
+    input: { now: WED, dateFormat: 'MDY', text: 'add birthdays\nAda 03/04\nObi 12/25' },
+    expected: bulk([line('Ada 03/04', 'Ada', 3, 4), line('Obi 12/25', 'Obi', 12, 25)]),
+  },
+  {
+    name: 'bulk: birth years are kept',
+    input: { now: WED, text: 'add these birthdays:\nGrace - 12-10-1990\nPeter: 5 May 1985\nIfeoma 01/02' },
+    expected: bulk([
+      line('Grace - 12-10-1990', 'Grace', 10, 12, { year: 1990 }),
+      line('Peter: 5 May 1985', 'Peter', 5, 5, { year: 1985 }),
+      line('Ifeoma 01/02', 'Ifeoma', 2, 1),
+    ]),
+  },
+  {
+    name: 'bulk: separators (-, –, :, none) and ordinals',
+    input: { now: WED, text: 'add these birthdays\nEmeka - 1st Nov\nNgozi – 2nd of November\nDayo: 30th Nov\nYemi 4 Nov' },
+    expected: bulk([
+      line('Emeka - 1st Nov', 'Emeka', 11, 1),
+      line('Ngozi – 2nd of November', 'Ngozi', 11, 2),
+      line('Dayo: 30th Nov', 'Dayo', 11, 30),
+      line('Yemi 4 Nov', 'Yemi', 11, 4),
+    ]),
+  },
+  {
+    name: 'bulk: Pidgin phrasing',
+    input: { now: WED, text: 'abeg add these birthdays for us\nBaba Tola na 14 Feb\nAunty Nkechi 8th March' },
+    expected: bulk([line('Baba Tola na 14 Feb', 'Baba Tola', 2, 14), line('Aunty Nkechi 8th March', 'Aunty Nkechi', 3, 8)]),
+  },
+  {
+    name: 'bulk: phone-number (JID) mentions only',
+    input: { now: WED, mentionedUsers: [JOHN, BOLA], text: `birthdays:\n${JOHN.token} - 3 Jan\n${BOLA.token} - 9 Feb` },
+    expected: bulk([
+      line(`${JOHN.token} - 3 Jan`, null, 1, 3, { mention_user_id: JOHN.id }),
+      line(`${BOLA.token} - 9 Feb`, null, 2, 9, { mention_user_id: BOLA.id }),
+    ]),
+  },
+  {
+    name: 'bulk: LID mentions mixed with plain names, mentions out of order',
+    input: { now: WED, mentionedUsers: [MARY, JOHN], text: `add these birthdays\nSola 7 Jul\n${JOHN.token} 8 Jul\n${MARY.token} 9 Jul` },
+    expected: bulk([
+      line('Sola 7 Jul', 'Sola', 7, 7),
+      line(`${JOHN.token} 8 Jul`, null, 7, 8, { mention_user_id: JOHN.id }),
+      line(`${MARY.token} 9 Jul`, null, 7, 9, { mention_user_id: MARY.id }),
+    ]),
+  },
+  {
+    name: 'bulk: unreadable and impossible dates go to unparsed',
+    input: { now: WED, text: 'add these birthdays:\nBisi - sometime next year\nKunle - 31 June\nFemi - 2 Aug' },
+    expected: bulk([line('Femi - 2 Aug', 'Femi', 8, 2)], ['Bisi - sometime next year', 'Kunle - 31 June']),
+  },
+  {
+    name: 'bulk: a heading and bullets around the list',
+    input: { now: WED, text: 'Here are our November celebrants 🎉\n• Ada — 4 Nov\n• Chinedu — 18 Nov\nThanks!' },
+    expected: bulk([line('• Ada — 4 Nov', 'Ada', 11, 4), line('• Chinedu — 18 Nov', 'Chinedu', 11, 18)]),
+  },
+  {
+    name: 'bulk: asked to add birthdays but no list',
+    input: { now: WED, text: 'add these birthdays' },
+    expected: bulk([]),
+    alsoAccept: ['clarify'],
+  },
+  {
+    name: 'bulk: duplicates within the list are still returned (code de-duplicates)',
+    input: { now: WED, text: 'birthdays\nTayo 1 Sep\nTayo - 1st September' },
+    expected: bulk([line('Tayo 1 Sep', 'Tayo', 9, 1), line('Tayo - 1st September', 'Tayo', 9, 1)]),
+  },
+  {
+    name: 'link a name-only birthday to a member',
+    input: {
+      now: WED, mentionedUsers: [JOHN], text: `link John to ${JOHN.token}`,
+      activeReminders: [{ shortId: 3, title: "John's birthday", kind: 'birthday', when: 'every year on 12 Oct at 06:00 (WAT)' }],
+    },
+    expected: { action: 'link_birthday', target: { short_id: 3, description: 'John' }, user_id: JOHN.id },
+  },
+  {
+    name: 'link without a mention → clarify',
+    input: {
+      now: WED, text: 'link Mama Bisi to her account',
+      activeReminders: [{ shortId: 4, title: "Mama Bisi's birthday", kind: 'birthday', when: 'every year on 5 Jun at 06:00 (WAT)' }],
+    },
+    expected: { action: 'clarify', question: 'Who should I link it to? Please @mention them.' },
+  },
+  {
+    name: 'date format → month first',
+    input: { now: WED, text: 'we write dates the American way, month first' },
+    expected: { action: 'set_date_format', format: 'MDY' },
+  },
 ];
 
 export function fixtureToInput(f: Fixture): ParserInput {
@@ -418,6 +541,38 @@ export function compareCommands(f: Fixture, actual: ParsedCommand): string[] {
   }
   if (e.action === 'set_timezone' && actual.action === 'set_timezone' && e.timezone !== actual.timezone) {
     problems.push(`timezone: expected ${e.timezone}, got ${actual.timezone}`);
+  }
+  if (e.action === 'bulk_add_birthdays' && actual.action === 'bulk_add_birthdays') {
+    // What matters is what would be saved: run both through the same deterministic import.
+    const mentioned = f.input.mentionedUsers ?? [];
+    const ctx: BulkContext = {
+      dateFormat: f.input.dateFormat ?? 'DMY',
+      now,
+      mentioned: mentioned.map((u, i) => ({ memberId: i + 1, tokens: [u.token], name: u.name ?? null })),
+      members: [],
+      existing: [],
+    };
+    const summary = (c: typeof e) => {
+      const r = buildImport(c, ctx);
+      return {
+        saved: r.entries.map((x) => `${x.memberId ?? normaliseName(x.name)} ${x.day}/${x.month}${x.year ? `/${x.year}` : ''}`),
+        unreadable: r.unreadable.length,
+      };
+    };
+    const want = summary(e);
+    const got = summary(actual);
+    if (JSON.stringify(want) !== JSON.stringify(got)) {
+      problems.push(`import: expected ${JSON.stringify(want)}, got ${JSON.stringify(got)}`);
+    }
+  }
+  if (e.action === 'link_birthday' && actual.action === 'link_birthday') {
+    if (e.user_id !== actual.user_id) problems.push(`user: expected ${e.user_id}, got ${actual.user_id}`);
+    if (e.target.short_id !== null && e.target.short_id !== actual.target.short_id) {
+      problems.push(`target: expected #${e.target.short_id}, got #${actual.target.short_id}`);
+    }
+  }
+  if (e.action === 'set_date_format' && actual.action === 'set_date_format' && e.format !== actual.format) {
+    problems.push(`format: expected ${e.format}, got ${actual.format}`);
   }
   if (e.action === 'set_policy' && actual.action === 'set_policy' && e.policy !== actual.policy) {
     problems.push(`policy: expected ${e.policy}, got ${actual.policy}`);

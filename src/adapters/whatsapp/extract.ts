@@ -85,11 +85,20 @@ export function parseRaw(msg: WAMessage, botIds: string[]): RawIncoming | null {
   };
 }
 
-/** Removes "@<bot>" tokens for every bot identity (phone number and LID). */
+/** Removes "@<bot>" tokens for every bot identity (phone number and LID). Keeps line breaks (pasted lists). */
 function stripBot(text: string, botIds: string[]): string {
   let stripped = text;
   for (const id of botIds) stripped = stripped.replaceAll(`@${jidUser(id)}`, ' ');
-  return stripped.replace(/\s+/g, ' ').trim();
+  return collapseSpaces(stripped);
+}
+
+/** Collapses spaces within each line and drops blank lines, keeping the line structure. */
+export function collapseSpaces(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
 }
 
 function participantIds(p: ParticipantInfo): string[] {

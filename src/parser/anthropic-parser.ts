@@ -1,8 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import type { Logger } from '../logger.js';
 import { allowedSubjectIds, buildUserContent, loadSystemPrompt } from './context.js';
-import { LlmOutputSchema, validateCommand, type ParsedCommand } from './schema.js';
+import { validateCommand, type ParsedCommand } from './schema.js';
+import { commandTools, fromToolCall } from './tools.js';
 import { ParserUnavailableError, type Parser, type ParserInput } from './types.js';
 
 export interface AnthropicParserOptions {
@@ -15,13 +15,17 @@ export interface AnthropicParserOptions {
   timeoutMs?: number;
 }
 
+const RETRY_QUESTION = "Sorry, I didn't quite get that. Could you rephrase it?";
+
 /**
- * LLM-backed parser. The model only converts text to a command; its output is constrained by
- * structured outputs and then validated again with zod before anything uses it.
+ * LLM-backed parser. The model only converts text to a command by calling one strict tool per
+ * action (see tools.ts for why tools); the call is then validated again with zod before
+ * anything uses it.
  */
 export class AnthropicParser implements Parser {
   private readonly client: Anthropic;
   private readonly systemPrompt: string;
+  private readonly tools = commandTools();
 
   constructor(private readonly opts: AnthropicParserOptions) {
     this.client = new Anthropic({ apiKey: opts.apiKey, timeout: opts.timeoutMs ?? 30_000, maxRetries: 2 });
@@ -31,15 +35,15 @@ export class AnthropicParser implements Parser {
   async parseCommand(input: ParserInput): Promise<ParsedCommand> {
     let response;
     try {
-      response = await this.client.messages.parse({
+      response = await this.client.messages.create({
         model: this.opts.model,
         max_tokens: 16000,
         system: [{ type: 'text', text: this.systemPrompt, cache_control: { type: 'ephemeral' } }],
+        tools: this.tools,
+        // "auto": forcing a tool is rejected by some current models; the prompt says to always call one.
+        tool_choice: { type: 'auto', disable_parallel_tool_use: true },
         messages: [{ role: 'user', content: buildUserContent(input) }],
-        output_config: {
-          format: zodOutputFormat(LlmOutputSchema),
-          ...(this.opts.effort ? { effort: this.opts.effort } : {}),
-        },
+        ...(this.opts.effort ? { output_config: { effort: this.opts.effort } } : {}),
       });
     } catch (err) {
       if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) {
@@ -51,9 +55,7 @@ export class AnthropicParser implements Parser {
       } else if (err instanceof Anthropic.APIError) {
         this.opts.logger.warn({ err }, 'Parser API error');
       } else {
-        // zod/JSON errors from client-side parsing land here; treat as a garbled response.
-        this.opts.logger.warn({ err }, 'Parser response could not be parsed');
-        return { action: 'clarify', question: "Sorry, I didn't quite get that. Could you rephrase it?" };
+        this.opts.logger.warn({ err }, 'Parser call failed');
       }
       throw new ParserUnavailableError('Parser unavailable', { cause: err });
     }
@@ -61,12 +63,13 @@ export class AnthropicParser implements Parser {
     if (response.stop_reason === 'refusal') {
       return { action: 'unsupported', reason: 'I can only help with reminders for this group.' };
     }
-    if (response.stop_reason === 'max_tokens' || !response.parsed_output) {
+    const call = response.content.find((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
+    if (response.stop_reason === 'max_tokens' || !call) {
       this.opts.logger.warn({ stopReason: response.stop_reason }, 'Parser returned no usable output');
-      return { action: 'clarify', question: "Sorry, I didn't quite get that. Could you rephrase it?" };
+      return { action: 'clarify', question: RETRY_QUESTION };
     }
 
-    const validated = validateCommand(response.parsed_output, { mentionedUserIds: allowedSubjectIds(input) });
+    const validated = validateCommand({ command: fromToolCall(call.name, call.input) }, { mentionedUserIds: allowedSubjectIds(input) });
     if (!validated.ok) {
       this.opts.logger.info({ issues: validated.issues }, 'Parser output failed validation');
       return validated.fallback;

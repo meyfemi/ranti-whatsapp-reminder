@@ -15,6 +15,13 @@
       "when": 1791592816563,
       "tag": "0001_whatsapp_auth",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792061831243,
+      "tag": "0002_bulk_birthdays",
+      "breakpoints": true
     }
   ]
 }

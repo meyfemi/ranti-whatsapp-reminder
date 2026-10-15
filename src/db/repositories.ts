@@ -54,7 +54,7 @@ export async function getGroup(db: DbOrTx, id: number): Promise<Group | undefine
 export async function updateGroup(
   db: DbOrTx,
   id: number,
-  patch: Partial<Pick<Group, 'timezone' | 'creationPolicy' | 'active' | 'name'>>,
+  patch: Partial<Pick<Group, 'timezone' | 'creationPolicy' | 'active' | 'name' | 'dateFormat'>>,
 ): Promise<void> {
   await db.update(groups).set(patch).where(eq(groups.id, id));
 }
@@ -130,6 +130,10 @@ export async function findMemberByAnyId(db: DbOrTx, groupId: number, ids: string
     )
     .limit(1);
   return m;
+}
+
+export async function listMembers(db: DbOrTx, groupId: number): Promise<MemberRow[]> {
+  return db.select().from(members).where(eq(members.groupId, groupId)).orderBy(asc(members.id));
 }
 
 export async function getMember(db: DbOrTx, id: number): Promise<MemberRow | undefined> {

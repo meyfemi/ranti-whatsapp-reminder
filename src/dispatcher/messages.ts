@@ -31,9 +31,11 @@ export async function buildReminderMessage(input: BuildMessageInput): Promise<Ou
 
   let text: string;
   if ((r.kind === 'birthday' || r.kind === 'anniversary') && offsetMinutes === 0) {
+    // A birthday from a pasted list may have only a name: wish them by name, without a mention.
+    const byName = r.subjectName ? sanitizeText(r.subjectName, 40) || null : null;
     text = await input.greeter.greet({
       kind: r.kind,
-      subject: subjectToken,
+      subject: subjectToken ?? byName,
       title,
       style: r.messageStyle ? sanitizeText(r.messageStyle, 200) : null,
     });

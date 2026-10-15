@@ -8,6 +8,7 @@ import {
   getReminder,
   insertReminder,
   listActiveReminders,
+  listMembers,
   listPendingForReminder,
   updateGroup,
   updateReminder,
@@ -16,8 +17,9 @@ import {
 import { groups, type Group, type Reminder } from '../db/schema.js';
 import type { Logger } from '../logger.js';
 import type { Clock } from '../scheduler/clock.js';
-import { isValidTimezone } from '../scheduler/recurrence.js';
+import { isValidTimezone, parseLocal } from '../scheduler/recurrence.js';
 import { toIsoLocal, type ScheduledOccurrence, type Scheduler } from '../scheduler/scheduler.js';
+import { dropDuplicates, yearlyStartLocal, type ExistingBirthday, type ImportEntry } from './bulk.js';
 import { canChangeSettings, canCreate, canModify } from './permissions.js';
 import { fail, ok, type ActorContext, type CreateReminderInput, type ServiceResult } from './types.js';
 import { validateCreate } from './validation.js';
@@ -83,24 +85,7 @@ export class ReminderService {
     const result = await this.inTransaction(async (tx) => {
       const capError = await this.checkCap(tx, actor.group.id);
       if (capError) return fail<CreatedReminder>(capError);
-      const shortId = await allocateShortId(tx, actor.group.id);
-      const reminder = await insertReminder(tx, {
-        groupId: actor.group.id,
-        shortId,
-        title: v.title,
-        kind: v.kind,
-        startLocal: v.startLocal,
-        rrule: v.rrule,
-        timezone: actor.group.timezone,
-        offsetsMinutes: v.offsetsMinutes,
-        subjectMemberId: v.subjectMemberId,
-        messageStyle: v.messageStyle,
-        createdByMemberId: actor.member.id,
-      });
-      const occurrences = await this.scheduler.scheduleInitial(tx, reminder);
-      // e.g. "remind me 5 minutes before" when it's 3 minutes before: nothing left to send.
-      if (occurrences.length === 0) return fail<CreatedReminder>(ROLLBACK_NOTHING_LEFT);
-      return ok<CreatedReminder>({ reminder, occurrences });
+      return this.insertAndSchedule(tx, actor, v);
     });
 
     if (result.ok) {
@@ -108,6 +93,134 @@ export class ReminderService {
       this.logger.info({ reminderId: result.value.reminder.id, groupId: actor.group.id }, 'Reminder created');
     }
     return result;
+  }
+
+  /** The shared tail of every create: stores a validated reminder and its first occurrences. */
+  private async insertAndSchedule(
+    tx: DbOrTx,
+    actor: ActorContext,
+    v: CreateReminderInput,
+  ): Promise<ServiceResult<CreatedReminder>> {
+    const shortId = await allocateShortId(tx, actor.group.id);
+    const reminder = await insertReminder(tx, {
+      groupId: actor.group.id,
+      shortId,
+      title: v.title,
+      kind: v.kind,
+      startLocal: v.startLocal,
+      rrule: v.rrule,
+      timezone: actor.group.timezone,
+      offsetsMinutes: v.offsetsMinutes,
+      subjectMemberId: v.subjectMemberId,
+      subjectName: v.subjectName ?? null,
+      birthYear: v.birthYear ?? null,
+      messageStyle: v.messageStyle,
+      createdByMemberId: actor.member.id,
+    });
+    const occurrences = await this.scheduler.scheduleInitial(tx, reminder);
+    // e.g. "remind me 5 minutes before" when it's 3 minutes before: nothing left to send.
+    if (occurrences.length === 0) return fail<CreatedReminder>(ROLLBACK_NOTHING_LEFT);
+    return ok<CreatedReminder>({ reminder, occurrences });
+  }
+
+  // ------------------------------------------------------------------ bulk birthdays
+
+  /** How many more active reminders the group can have. */
+  async remainingSlots(groupId: number): Promise<number> {
+    return Math.max(0, this.opts.maxActivePerGroup - (await countActiveReminders(this.db, groupId)));
+  }
+
+  get maxActivePerGroup(): number {
+    return this.opts.maxActivePerGroup;
+  }
+
+  /** The group's active birthdays in the shape duplicate checks need. */
+  async existingBirthdays(db: DbOrTx, groupId: number): Promise<ExistingBirthday[]> {
+    const active = (await listActiveReminders(db, groupId)).filter((r) => r.kind === 'birthday');
+    const names = new Map((await listMembers(db, groupId)).map((m) => [m.id, m.lastKnownDisplayName]));
+    return active.map((r) => {
+      const start = parseLocal(toIsoLocal(r.startLocal))!;
+      return {
+        memberId: r.subjectMemberId,
+        name: birthdayName(r, r.subjectMemberId ? (names.get(r.subjectMemberId) ?? null) : null),
+        month: start.month,
+        day: start.day,
+      };
+    });
+  }
+
+  /**
+   * Saves a confirmed import: every birthday goes through the same validation and insert as a
+   * single create, all in one transaction (all saved or none). Entries that became duplicates
+   * since the preview are left out and returned as `skipped`.
+   */
+  async importBirthdays(
+    actor: ActorContext,
+    entries: ImportEntry[],
+  ): Promise<ServiceResult<{ created: CreatedReminder[]; skipped: ImportEntry[] }>> {
+    if (!canCreate(actor)) return fail('Only group admins can set reminders in this group.');
+    const now = this.clock.now();
+    const result = await this.inTransaction(async (tx) => {
+      await tx.select({ id: groups.id }).from(groups).where(eq(groups.id, actor.group.id)).for('update');
+      const { keep, dropped } = dropDuplicates(entries, await this.existingBirthdays(tx, actor.group.id));
+      if (keep.length === 0) return fail<{ created: CreatedReminder[]; skipped: ImportEntry[] }>('All of those birthdays are already saved.');
+      const active = await countActiveReminders(tx, actor.group.id);
+      if (active + keep.length > this.opts.maxActivePerGroup) {
+        const left = Math.max(0, this.opts.maxActivePerGroup - active);
+        return fail<{ created: CreatedReminder[]; skipped: ImportEntry[] }>(
+          `Only ${left} more reminder${left === 1 ? '' : 's'} fit in this group (the limit is ${this.opts.maxActivePerGroup}).`,
+        );
+      }
+      const created: CreatedReminder[] = [];
+      for (const e of keep) {
+        const validated = validateCreate(
+          {
+            title: `${e.name}'s birthday`,
+            kind: 'birthday',
+            startLocal: yearlyStartLocal(e.month, e.day, now, actor.group.timezone),
+            rrule: 'FREQ=YEARLY',
+            offsetsMinutes: [0],
+            subjectMemberId: e.memberId,
+            subjectName: e.name,
+            birthYear: e.year,
+            messageStyle: null,
+          },
+          actor.group.timezone,
+          now,
+        );
+        if (!validated.ok) return validated;
+        const one = await this.insertAndSchedule(tx, actor, validated.value);
+        if (!one.ok) return one;
+        created.push(one.value);
+      }
+      return ok({ created, skipped: dropped });
+    });
+    if (result.ok) {
+      await this.scheduler.enqueue(result.value.created.flatMap((c) => c.occurrences));
+      this.logger.info({ groupId: actor.group.id, count: result.value.created.length }, 'Birthdays imported');
+    }
+    return result;
+  }
+
+  /**
+   * Links a birthday (or any reminder) to a member so future wishes @mention them.
+   * `bypassPermissions` is for the person themself confirming "yes, that's me".
+   */
+  async linkSubject(
+    actor: ActorContext,
+    reminderId: number,
+    memberId: number,
+    opts: { bypassPermissions?: boolean } = {},
+  ): Promise<ServiceResult<Reminder>> {
+    const reminder = await this.lockReminder(this.db, actor, reminderId);
+    if (!reminder || !reminder.active) return fail("I couldn't find that reminder.");
+    if (!opts.bypassPermissions && !canModify(actor, reminder)) {
+      return fail('Only the person who set this reminder or a group admin can change it.');
+    }
+    if (reminder.subjectMemberId === memberId) return fail(`#${reminder.shortId} is already linked to them.`);
+    const updated = await updateReminder(this.db, reminder.id, { subjectMemberId: memberId });
+    this.logger.info({ reminderId, groupId: actor.group.id }, 'Reminder linked to member');
+    return ok(updated);
   }
 
   // ------------------------------------------------------------------ list
@@ -256,6 +369,12 @@ export class ReminderService {
     return ok({ group: result.value.group, rescheduled: result.value.rescheduled });
   }
 
+  async setDateFormat(actor: ActorContext, format: Group['dateFormat']): Promise<ServiceResult<Group>> {
+    if (!canChangeSettings(actor, 'date_format')) return fail('Only group admins can change the date format.');
+    await updateGroup(this.db, actor.group.id, { dateFormat: format });
+    return ok((await getGroup(this.db, actor.group.id))!);
+  }
+
   async setPolicy(actor: ActorContext, policy: Group['creationPolicy']): Promise<ServiceResult<Group>> {
     if (!canChangeSettings(actor, 'policy')) return fail('Only group admins can change who can set reminders.');
     await updateGroup(this.db, actor.group.id, { creationPolicy: policy });
@@ -295,6 +414,11 @@ export class ReminderService {
       throw err;
     }
   }
+}
+
+/** The person a birthday is for, by name: the stored name, the member's name, or the title. */
+export function birthdayName(r: Pick<Reminder, 'subjectName' | 'title'>, memberName: string | null): string | null {
+  return r.subjectName ?? memberName ?? (r.title.replace(/['’]s\s+birthday$/i, '').trim() || null);
 }
 
 export function snapshot(r: Reminder): ReminderSnapshot {

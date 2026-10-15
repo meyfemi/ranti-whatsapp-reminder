@@ -10,8 +10,8 @@ export function canModify(actor: ActorContext, reminder: Pick<Reminder, 'created
   return actor.isAdmin || reminder.createdByMemberId === actor.member.id;
 }
 
-/** Group settings (timezone, creation policy). */
-export function canChangeSettings(actor: ActorContext, setting: 'timezone' | 'policy'): boolean {
-  if (setting === 'policy') return actor.isAdmin;
+/** Group settings (timezone, creation policy, date format). */
+export function canChangeSettings(actor: ActorContext, setting: 'timezone' | 'policy' | 'date_format'): boolean {
+  if (setting === 'policy' || setting === 'date_format') return actor.isAdmin;
   return actor.group.creationPolicy === 'anyone' || actor.isAdmin;
 }

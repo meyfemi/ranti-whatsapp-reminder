@@ -14,7 +14,9 @@ import {
 export const creationPolicy = pgEnum('creation_policy', ['anyone', 'admins']);
 export const reminderKind = pgEnum('reminder_kind', ['birthday', 'anniversary', 'event', 'generic']);
 export const occurrenceStatus = pgEnum('occurrence_status', ['pending', 'sent', 'failed', 'skipped']);
-export const interactionKind = pgEnum('interaction_kind', ['clarify', 'undo', 'choose']);
+export const interactionKind = pgEnum('interaction_kind', ['clarify', 'undo', 'choose', 'bulk_import', 'confirm_link']);
+/** How numeric dates such as 03/04 are read: day first (DMY) or month first (MDY). */
+export const dateFormat = pgEnum('date_format', ['DMY', 'MDY']);
 
 const createdAt = () => timestamp('created_at', { withTimezone: true }).notNull().default(sql`now()`);
 
@@ -27,6 +29,7 @@ export const groups = pgTable(
     name: text('name'),
     timezone: text('timezone').notNull().default('Africa/Lagos'),
     creationPolicy: creationPolicy('creation_policy').notNull().default('anyone'),
+    dateFormat: dateFormat('date_format').notNull().default('DMY'),
     active: boolean('active').notNull().default(true),
     /** Next per-group short ID to hand out to a reminder. */
     nextShortId: integer('next_short_id').notNull().default(1),
@@ -70,6 +73,10 @@ export const reminders = pgTable(
     timezone: text('timezone').notNull(),
     offsetsMinutes: integer('offsets_minutes').array().notNull().default(sql`'{0}'::int[]`),
     subjectMemberId: integer('subject_member_id').references(() => members.id, { onDelete: 'set null' }),
+    /** Name of the person when they aren't linked to a member (e.g. from a pasted birthday list). */
+    subjectName: text('subject_name'),
+    /** Birth year if given. Stored only; ages are never announced. */
+    birthYear: integer('birth_year'),
     messageStyle: text('message_style'),
     createdByMemberId: integer('created_by_member_id')
       .notNull()
