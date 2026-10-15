@@ -11,6 +11,8 @@ Ranti is a WhatsApp account you add to your existing groups (family, church, alu
 @Ranti when is my birthday?
 @Ranti cancel #4
 @Ranti set timezone to Europe/London
+@Ranti what's coming up this week?
+@Ranti turn on the weekly digest
 @Ranti add these birthdays:
 John - 12 Oct
 @Ada 3 March
@@ -30,6 +32,27 @@ Every create, edit or cancel is echoed back, and the person who made the change 
 - **People.** A line with an @mention is linked to that member. A plain name is linked only if exactly one known member has exactly that display name, shown as "(matched to member John)". Otherwise the birthday is saved by name and the wish uses the name without a mention. `@Ranti link John to @John` (the creator or an admin) links it later. When someone adds their own birthday and a by-name birthday on that date matches their name, Ranti asks whether it's theirs instead of saving a duplicate.
 - **Duplicates** are skipped: the same member, or the same name on the same date, whether already saved or listed twice.
 - **Limits.** Up to 100 birthdays per list (`BULK_IMPORT_MAX_ENTRIES`). If the list would pass the group's reminder cap, the preview says how many fit and `save N` saves the first N. Saving is all-or-nothing, through the same path as a single birthday (yearly, at 06:00). Long previews are split into numbered parts.
+
+### Weekly digest
+
+An opt-in weekly summary of the next 7 days, posted into the group:
+
+```
+📅 This week in Family Group (13–19 Oct)
+
+Wed 15 – 🎂 Ada's birthday
+Thu 16 – Choir practice, 18:00
+Sat 18 – 💍 Tunde & Bisi's anniversary
+Sat 18 – Pay monthly dues, 09:00
+
+Have a great week!
+```
+
+- **Settings (admins only):** `@Ranti turn on the weekly digest`, `@Ranti turn off the digest`, `@Ranti send the digest on Sundays at 7pm` (a day or time on its own also turns it on), `@Ranti send the digest even when nothing is coming up`. The default is off, Mondays at 08:00 in the group timezone. Each change is echoed, e.g. `Weekly digest is on: Sundays at 19:00 (Africa/Lagos). Next one: Sun 18 Oct.`
+- **On demand:** anyone can ask `@Ranti what's coming up?` for the same summary of the next 7 days, whether or not the digest is on.
+- **Content:** every active reminder's main time (not its early reminders) in the 7 local days from the send day, expanded from its rule in the group timezone (DST and 29 February as for normal reminders). Grouped by day, with birthdays and anniversaries first, at most 20 lines. Names are plain text, so the digest never notifies anyone; the birthday wish on the day still tags the person. Timed items that have already passed by send time are left out, but today's birthdays stay in.
+- **Empty weeks** are skipped unless the group asked for a "Nothing scheduled this week" post.
+- **Delivery** follows the reminder pattern: the next send is a row in `digest_runs` with a pg-boss job, claimed before sending, so it can't post twice. Sends are spread over 0–15 minutes after the set time. A digest less than 6 hours late after downtime is still sent; an older one is skipped and next week's is scheduled. There is at most one digest per group per ISO week.
 
 > [!WARNING]
 > **Ranti uses an unofficial WhatsApp client.** It connects through [Baileys](https://github.com/WhiskeySockets/Baileys), which speaks the WhatsApp Web multi-device protocol as a linked device of a normal WhatsApp account. This is not the WhatsApp Business API and is not endorsed by WhatsApp or Meta. **The account can be restricted or banned at any time, without warning.** Use a dedicated phone number you can afford to lose, never your personal number. Ranti is built to look and behave like a polite human participant (see [Ban-risk measures](#ban-risk-measures)), but that reduces risk; it does not remove it.
@@ -116,7 +139,7 @@ Type messages as the current user and include `@ranti` to mention the bot. Menti
 | `/users` | List simulated users |
 | `/clock` | Show the simulated time |
 | `/advance 2h` | Fast-forward (`90s`, `5m`, `2h`, `3d`, `1w`, or combined like `1d6h`). Every reminder due on the way fires at its own moment. |
-| `/settime 2026-10-12T08:59` | Jump to a local date-time |
+| `/settime 2026-10-12T08:59` | Jump to a local date-time. Weekly digests due on the way are sent too. |
 
 Example session:
 
@@ -190,10 +213,11 @@ The test run drops and re-migrates the `ranti_test` schema, then runs DB-backed 
 - **Recurrence:** DST gaps and overlaps, Feb 29 to Feb 28, "first Saturday", offsets.
 - **Dispatcher:** idempotency under concurrent duplicates, retries, recovery.
 - **Commands:** permissions, caps, undo.
+- **Weekly digest:** the 7-day window (yearly, monthly, weekly, one-off; month and year ends; DST; 29 Feb; cancelled reminders), formatting and truncation, scheduling, jitter, claim-once sending, rescheduling, missed-run recovery, permissions, and a CLI scenario over two weeks.
 - **Birthday lists:** date reading (DMY/MDY, 29 Feb), mention-to-member mapping for JIDs and LIDs, exact-name matching, duplicates, preview edits, the cap, all-or-nothing saves, linking, and a CLI scenario from paste to wish.
 - **WhatsApp adapter:** mention and LID handling, the auth store, rate limits and reconnect policy.
 
-The parser fixtures in `src/parser/fixtures.ts` hold 56 example messages with expected commands. They run against the real API only when asked:
+The parser fixtures in `src/parser/fixtures.ts` hold 74 example messages with expected commands. They run against the real API only when asked:
 
 ```bash
 RUN_LLM_TESTS=1 ANTHROPIC_API_KEY=... pnpm vitest run src/parser
@@ -237,6 +261,7 @@ docker logs -f ranti    # the pairing QR / code appears here on first run
 - **Members** are stored by the stable platform ID WhatsApp gives first, phone-number JID or LID, plus all known aliases. Lookups match any of them, and display names are never used to identify anyone.
 - **Undo windows and clarifying questions** live in `pending_interactions`, tied to the member and group, and expire after 5 and 10 minutes. Birthday-list previews live there too, for 30 minutes.
 - **Parser tools, not one response schema.** Structured outputs compile the schema into a grammar, and a single union of every command outgrew the API's limits (grammar size, and at most 16 nullable or union-typed fields across the whole schema). Each action is now its own strict tool, and fields that may be empty use an empty value (`""`, `0`, `[]` or `none`) rather than `null`. `src/parser/tools.ts` turns those back into `null` before the usual zod validation, so the rest of the code is unchanged.
+- **Digest runs in their own table.** `occurrences` rows belong to a reminder (`reminder_id` is required) and the dispatcher, sweeper and fast-forward all assume that. A small `digest_runs` table, unique per group and ISO week, gives the same claim-before-send guarantee without touching the reminder path.
 - **Birthdays by name.** A birthday from a list can have `subject_name` and no member. The wish then uses the name as plain text. `birth_year` is stored when given and never shown in wishes.
 
 ### Where this differs from the original brief

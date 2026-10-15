@@ -25,6 +25,8 @@ const TOOL_DESCRIPTIONS: Record<ParsedCommand['action'], string> = {
   bulk_add_birthdays: 'Save a pasted list of several birthdays (preview first).',
   link_birthday: 'Link a saved birthday to a mentioned group member.',
   set_date_format: 'Change how the group writes numeric dates.',
+  set_digest: 'Turn the weekly digest on or off, or change its day or time.',
+  show_upcoming: 'Show what is coming up in the next 7 days.',
   help: 'Explain what the bot does.',
   clarify: 'Ask one short question when something essential is missing.',
   unsupported: 'Anything that is not about this group’s reminders.',

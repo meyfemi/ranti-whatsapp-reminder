@@ -22,6 +22,13 @@
       "when": 1792061831243,
       "tag": "0002_bulk_birthdays",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792065051112,
+      "tag": "0003_weekly_digest",
+      "breakpoints": true
     }
   ]
 }

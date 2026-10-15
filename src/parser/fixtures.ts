@@ -40,6 +40,10 @@ const line = (raw_line: string, name_text: string | null, month: number, day: nu
   raw_line, name_text, mention_user_id: null, month, day, year: null, ...extra,
 });
 const bulk = (entries: BulkEntryFixture[], unparsed: string[] = []): ParsedCommand => ({ action: 'bulk_add_birthdays', entries, unparsed });
+type DigestFixture = Extract<ParsedCommand, { action: 'set_digest' }>;
+const digest = (enabled: DigestFixture['enabled'], weekday: DigestFixture['weekday'], time: string | null, empty_weeks: DigestFixture['empty_weeks'] = null): ParsedCommand => ({
+  action: 'set_digest', enabled, weekday, time, empty_weeks,
+});
 const noChanges = { title: null, start_local: null, rrule: null, make_one_off: false, offsets_minutes: null, message_style: null };
 
 export const FIXTURES: Fixture[] = [
@@ -73,6 +77,7 @@ export const FIXTURES: Fixture[] = [
     name: 'query this week',
     input: { now: WED, text: 'do we have any reminder this week?' },
     expected: query({ from_date: '2026-10-07', to_date: '2026-10-11' }),
+    alsoAccept: ['show_upcoming'],
   },
   {
     name: 'query own birthday',
@@ -460,6 +465,40 @@ export const FIXTURES: Fixture[] = [
     },
     expected: { action: 'clarify', question: 'Who should I link it to? Please @mention them.' },
   },
+  // ------------------------------------------------------------ weekly digest
+  { name: 'digest: turn on', input: { now: WED, text: 'turn on the weekly digest' }, expected: digest('on', null, null) },
+  { name: 'digest: turn off', input: { now: WED, text: 'turn off the digest' }, expected: digest('off', null, null) },
+  {
+    name: 'digest: day and time',
+    input: { now: WED, text: 'send the digest on Sundays at 7pm' },
+    expected: digest(null, 'SU', '19:00'),
+  },
+  { name: 'digest: change the day only', input: { now: WED, text: 'move the weekly summary to Fridays' }, expected: digest(null, 'FR', null) },
+  { name: 'digest: change the time only', input: { now: WED, text: 'make the digest come at 6:30am' }, expected: digest(null, null, '06:30') },
+  {
+    name: 'digest: vague time → clarify',
+    input: { now: WED, text: 'send the digest every Sunday evening' },
+    expected: { action: 'clarify', question: 'What time on Sunday evening should the digest go out?' },
+  },
+  {
+    name: 'digest: informal phrasing',
+    input: { now: WED, text: 'abeg dey send us weekly summary every Monday by 8am' },
+    expected: digest('on', 'MO', '08:00'),
+  },
+  { name: 'digest: stop (Pidgin)', input: { now: WED, text: 'make una stop the weekly digest abeg' }, expected: digest('off', null, null) },
+  {
+    name: 'digest: post even in empty weeks',
+    input: { now: WED, text: 'send the digest even when nothing is coming up' },
+    expected: digest(null, null, null, 'post'),
+  },
+  { name: 'upcoming: plain', input: { now: WED, text: "what's coming up?" }, expected: { action: 'show_upcoming' } },
+  { name: 'upcoming: this week', input: { now: WED, text: "what's coming up this week?" }, expected: { action: 'show_upcoming' } },
+  {
+    name: 'upcoming: next few days',
+    input: { now: WED, text: 'anything happening in the next few days?' },
+    expected: { action: 'show_upcoming' },
+    alsoAccept: ['query'],
+  },
   {
     name: 'date format → month first',
     input: { now: WED, text: 'we write dates the American way, month first' },
@@ -570,6 +609,14 @@ export function compareCommands(f: Fixture, actual: ParsedCommand): string[] {
     if (e.target.short_id !== null && e.target.short_id !== actual.target.short_id) {
       problems.push(`target: expected #${e.target.short_id}, got #${actual.target.short_id}`);
     }
+  }
+  if (e.action === 'set_digest' && actual.action === 'set_digest') {
+    // A day or time on its own turns the digest on, so null and "on" mean the same there.
+    const effective = (c: typeof e) => c.enabled ?? (c.weekday || c.time ? 'on' : null);
+    if (effective(e) !== effective(actual)) problems.push(`enabled: expected ${effective(e)}, got ${effective(actual)}`);
+    if (e.weekday !== actual.weekday) problems.push(`weekday: expected ${e.weekday}, got ${actual.weekday}`);
+    if (e.time !== actual.time) problems.push(`time: expected ${e.time}, got ${actual.time}`);
+    if (e.empty_weeks !== actual.empty_weeks) problems.push(`empty_weeks: expected ${e.empty_weeks}, got ${actual.empty_weeks}`);
   }
   if (e.action === 'set_date_format' && actual.action === 'set_date_format' && e.format !== actual.format) {
     problems.push(`format: expected ${e.format}, got ${actual.format}`);

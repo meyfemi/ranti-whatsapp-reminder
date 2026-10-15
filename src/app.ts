@@ -3,6 +3,7 @@ import { Bot } from './bot/bot.js';
 import type { Config } from './config.js';
 import { createDb, type DbHandle } from './db/client.js';
 import { runMigrations } from './db/migrate.js';
+import { DigestService } from './digest/service.js';
 import { Dispatcher } from './dispatcher/dispatcher.js';
 import { TemplateGreeter, type Greeter } from './dispatcher/greetings.js';
 import { LlmGreeter } from './dispatcher/llm-greeter.js';
@@ -38,6 +39,7 @@ export interface App {
   dispatcher: Dispatcher;
   recovery: Recovery;
   reminders: ReminderService;
+  digests: DigestService;
   bot: Bot;
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -60,14 +62,15 @@ export async function createApp(opts: AppOptions): Promise<App> {
       ? new LlmGreeter(config.PARSER_MODEL, logger, { apiKey: config.ANTHROPIC_API_KEY })
       : new TemplateGreeter());
   const dispatcher = new Dispatcher(handle.db, adapter, scheduler, greeter, clock, logger);
-  const recovery = new Recovery(handle.db, scheduler, dispatcher, clock, logger);
+  const digests = new DigestService(handle.db, adapter, queue, clock, logger, { botName: config.BOT_NAME });
+  const recovery = new Recovery(handle.db, scheduler, dispatcher, clock, logger, digests);
   const reminders = new ReminderService(handle.db, scheduler, clock, logger, {
     maxActivePerGroup: config.MAX_ACTIVE_REMINDERS_PER_GROUP,
   });
   const parser =
     opts.parser ??
     new AnthropicParser({ apiKey: config.ANTHROPIC_API_KEY, model: config.PARSER_MODEL, botName: config.BOT_NAME, logger });
-  const bot = new Bot(handle.db, adapter, parser, reminders, clock, logger, {
+  const bot = new Bot(handle.db, adapter, parser, reminders, digests, clock, logger, {
     platform: opts.platform,
     botName: config.BOT_NAME,
     defaultTimezone: config.DEFAULT_TIMEZONE,
@@ -83,12 +86,18 @@ export async function createApp(opts: AppOptions): Promise<App> {
     dispatcher,
     recovery,
     reminders,
+    digests,
     bot,
     async start() {
       if (pgboss) {
-        await pgboss.start(async (occurrenceId) => {
-          await dispatcher.dispatch(occurrenceId);
-        });
+        await pgboss.start(
+          async (occurrenceId) => {
+            await dispatcher.dispatch(occurrenceId);
+          },
+          async (runId) => {
+            await digests.send(runId);
+          },
+        );
       }
       await recovery.runStartup();
       recovery.startSweeper(opts.sweepIntervalMs ?? 60_000);

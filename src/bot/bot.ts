@@ -1,5 +1,7 @@
 import type { ChatAdapter, IncomingMessage, QuotedMessage } from '../adapters/types.js';
 import type { Db } from '../db/client.js';
+import type { DigestService } from '../digest/service.js';
+import { WEEKDAY_CODES } from '../digest/upcoming.js';
 import {
   createInteraction,
   deleteInteraction,
@@ -42,6 +44,7 @@ import { DateTime } from 'luxon';
 import {
   cancelledConfirmation,
   createdConfirmation,
+  digestConfirmation,
   editedConfirmation,
   helpText,
   introText,
@@ -92,6 +95,7 @@ export class Bot {
     private readonly adapter: ChatAdapter,
     private readonly parser: Parser,
     private readonly reminders: ReminderService,
+    private readonly digests: DigestService,
     private readonly clock: Clock,
     private readonly logger: Logger,
     private readonly opts: BotOptions,
@@ -122,7 +126,10 @@ export class Bot {
       name,
       defaultTimezone: this.opts.defaultTimezone,
     });
-    if (!group.active) await updateGroup(this.db, group.id, { active: true });
+    if (!group.active) {
+      await updateGroup(this.db, group.id, { active: true });
+      await this.digests.reschedule(group.id); // picks a digest back up if it was on
+    }
     await this.adapter.sendText(platformGroupId, introText(this.opts.botName, group.timezone, this.clock.now()));
   }
 
@@ -279,6 +286,7 @@ export class Bot {
       case 'set_timezone': {
         const res = await this.reminders.setTimezone(actor, command.timezone);
         if (!res.ok) return this.reply(msg, res.error);
+        await this.digests.reschedule(actor.group.id);
         const abbrev = tzAbbrev(DateTime.fromJSDate(now).setZone(command.timezone));
         const kept = res.value.rescheduled ? ' Existing reminders keep their local times.' : '';
         return this.reply(msg, `Timezone set to ${command.timezone} (${abbrev}).${kept}`);
@@ -297,6 +305,19 @@ export class Bot {
             : 'OK: I\'ll read numeric dates month first, so 03/04 is 4 Mar.',
         );
       }
+      case 'set_digest': {
+        const res = await this.digests.configure(actor, {
+          enabled: command.enabled === null ? null : command.enabled === 'on',
+          weekday: command.weekday === null ? null : WEEKDAY_CODES.indexOf(command.weekday) + 1,
+          time: command.time,
+          postEmpty: command.empty_weeks === null ? null : command.empty_weeks === 'post',
+        });
+        if (!res.ok) return this.reply(msg, res.error);
+        return this.reply(msg, digestConfirmation(res.value.group, res.value.next, this.opts.botName));
+      }
+      case 'show_upcoming':
+        // Anyone can ask, whether or not the weekly digest is on.
+        return this.reply(msg, await this.digests.upcomingText(actor.group));
       case 'set_policy': {
         const res = await this.reminders.setPolicy(actor, command.policy);
         if (!res.ok) return this.reply(msg, res.error);

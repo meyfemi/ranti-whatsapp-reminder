@@ -148,3 +148,19 @@ export function upcomingEvents(spec: RecurrenceSpec, afterUtc: Date, count: numb
   }
   return out;
 }
+
+/**
+ * Every event in [fromUtc, toUtc), soonest first, expanded in the reminder's own timezone
+ * (DST and 29 Feb handled exactly as for scheduling). At most `max` events.
+ */
+export function eventsInWindow(spec: RecurrenceSpec, fromUtc: Date, toUtc: Date, max = 100): Date[] {
+  const out: Date[] = [];
+  let cursor = new Date(fromUtc.getTime() - 1);
+  while (out.length < max) {
+    const next = nextEventAfter(spec, cursor);
+    if (!next || next.getTime() >= toUtc.getTime()) break;
+    out.push(next);
+    cursor = next;
+  }
+  return out;
+}

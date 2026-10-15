@@ -1,6 +1,6 @@
 import { DateTime } from 'luxon';
 import type { Reminder } from '../db/schema.js';
-import { nextEventAfter } from '../scheduler/recurrence.js';
+import { eventsInWindow, nextEventAfter } from '../scheduler/recurrence.js';
 import { specOf } from '../scheduler/scheduler.js';
 
 /**
@@ -50,18 +50,11 @@ export function eventsBetween(
   now: Date,
   limit = MAX_QUERY_EVENTS,
 ): { events: UpcomingEvent[]; truncated: boolean } {
-  const from = new Date(Math.max(start.getTime(), now.getTime()) - 1);
+  const from = new Date(Math.max(start.getTime(), now.getTime()));
   const events: UpcomingEvent[] = [];
   for (const reminder of reminders) {
-    const spec = specOf(reminder);
-    let cursor = from;
     // limit + 1 per reminder is enough to know whether the overall list was cut.
-    for (let i = 0; i <= limit; i++) {
-      const at = nextEventAfter(spec, cursor);
-      if (!at || at.getTime() >= end.getTime()) break;
-      events.push({ reminder, at });
-      cursor = at;
-    }
+    for (const at of eventsInWindow(specOf(reminder), from, end, limit + 1)) events.push({ reminder, at });
   }
   events.sort((a, b) => a.at.getTime() - b.at.getTime() || a.reminder.shortId - b.reminder.shortId);
   return { events: events.slice(0, limit), truncated: events.length > limit };

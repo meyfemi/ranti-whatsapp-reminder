@@ -30,6 +30,14 @@ export const groups = pgTable(
     timezone: text('timezone').notNull().default('Africa/Lagos'),
     creationPolicy: creationPolicy('creation_policy').notNull().default('anyone'),
     dateFormat: dateFormat('date_format').notNull().default('DMY'),
+    /** Weekly digest: off unless an admin turns it on. */
+    digestEnabled: boolean('digest_enabled').notNull().default(false),
+    /** ISO weekday the digest goes out on: 1 = Monday ... 7 = Sunday. */
+    digestWeekday: integer('digest_weekday').notNull().default(1),
+    /** Local time ("HH:mm", group timezone) the digest goes out at. */
+    digestTime: text('digest_time').notNull().default('08:00'),
+    /** Post "nothing scheduled" for an empty week instead of staying quiet. */
+    digestPostEmpty: boolean('digest_post_empty').notNull().default(false),
     active: boolean('active').notNull().default(true),
     /** Next per-group short ID to hand out to a reminder. */
     nextShortId: integer('next_short_id').notNull().default(1),
@@ -113,6 +121,35 @@ export const occurrences = pgTable(
   ],
 );
 
+/**
+ * One weekly digest per group per ISO week. Like occurrences, a run is claimed (pending -> sent)
+ * in a transaction before sending, and only the next run per group is ever pending.
+ */
+export const digestRuns = pgTable(
+  'digest_runs',
+  {
+    id: integer('id').primaryKey().generatedAlwaysAsIdentity(),
+    groupId: integer('group_id')
+      .notNull()
+      .references(() => groups.id, { onDelete: 'cascade' }),
+    /** ISO week of the slot in the group timezone, e.g. "2026-W43": at most one digest per week. */
+    weekKey: text('week_key').notNull(),
+    /** The configured send time, local to the group (before jitter). */
+    slotLocal: timestamp('slot_local', { withTimezone: false, mode: 'string' }).notNull(),
+    /** Slot time in UTC plus a random 0-15 minute spread. */
+    fireAt: timestamp('fire_at', { withTimezone: true }).notNull(),
+    status: occurrenceStatus('status').notNull().default('pending'),
+    sentAt: timestamp('sent_at', { withTimezone: true }),
+    attempts: integer('attempts').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex('digest_runs_group_week_uq').on(t.groupId, t.weekKey),
+    index('digest_runs_status_fire_at_idx').on(t.status, t.fireAt),
+  ],
+);
+
 export const pendingInteractions = pgTable(
   'pending_interactions',
   {
@@ -137,6 +174,7 @@ export type Reminder = typeof reminders.$inferSelect;
 export type NewReminder = typeof reminders.$inferInsert;
 export type Occurrence = typeof occurrences.$inferSelect;
 export type PendingInteraction = typeof pendingInteractions.$inferSelect;
+export type DigestRun = typeof digestRuns.$inferSelect;
 
 // ---------------------------------------------------------------- WhatsApp (Baileys) auth state
 // Values are JSON produced with Baileys' BufferJSON replacer, stored as text.

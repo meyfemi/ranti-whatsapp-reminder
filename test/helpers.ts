@@ -3,6 +3,7 @@ import type { ChatAdapter, IncomingMessage, Member } from '../src/adapters/types
 import { createDb, type DbHandle } from '../src/db/client.js';
 import { upsertGroup, upsertMember } from '../src/db/repositories.js';
 import type { Group, MemberRow } from '../src/db/schema.js';
+import { DigestService } from '../src/digest/service.js';
 import { Dispatcher, type DispatcherOptions } from '../src/dispatcher/dispatcher.js';
 import { TemplateGreeter, type Greeter } from '../src/dispatcher/greetings.js';
 import type { ActorContext } from '../src/reminders/types.js';
@@ -60,7 +61,7 @@ export class RecordingAdapter implements ChatAdapter {
 
 export async function truncateAll(handle: DbHandle): Promise<void> {
   await handle.pool.query(
-    'truncate groups, members, reminders, occurrences, pending_interactions restart identity cascade',
+    'truncate groups, members, reminders, occurrences, pending_interactions, digest_runs restart identity cascade',
   );
 }
 
@@ -73,11 +74,12 @@ export interface TestEnv {
   dispatcher: Dispatcher;
   recovery: Recovery;
   service: ReminderService;
+  digests: DigestService;
   greeter: Greeter;
 }
 
 export function createTestEnv(
-  opts: { now?: string; dispatcher?: DispatcherOptions; maxActive?: number; greeter?: Greeter } = {},
+  opts: { now?: string; dispatcher?: DispatcherOptions; maxActive?: number; greeter?: Greeter; random?: () => number } = {},
 ): TestEnv {
   const handle = createDb(process.env.TEST_DATABASE_URL!, { max: 5 });
   const clock = new FakeClock(new Date(opts.now ?? '2026-10-10T12:00:00Z'));
@@ -86,11 +88,13 @@ export function createTestEnv(
   const scheduler = new Scheduler(queue, clock, silentLogger);
   const greeter = opts.greeter ?? new TemplateGreeter(() => 0);
   const dispatcher = new Dispatcher(handle.db, adapter, scheduler, greeter, clock, silentLogger, opts.dispatcher);
-  const recovery = new Recovery(handle.db, scheduler, dispatcher, clock, silentLogger);
+  // Jitter 0 by default so digest times are exact in tests.
+  const digests = new DigestService(handle.db, adapter, queue, clock, silentLogger, { botName: 'Ranti', random: opts.random ?? (() => 0) });
+  const recovery = new Recovery(handle.db, scheduler, dispatcher, clock, silentLogger, digests);
   const service = new ReminderService(handle.db, scheduler, clock, silentLogger, {
     maxActivePerGroup: opts.maxActive ?? 50,
   });
-  return { handle, clock, queue, adapter, scheduler, dispatcher, recovery, service, greeter };
+  return { handle, clock, queue, adapter, scheduler, dispatcher, recovery, service, digests, greeter };
 }
 
 export async function makeActor(
@@ -130,7 +134,7 @@ export class ScriptedParser implements Parser {
 }
 
 export function makeBot(env: TestEnv, parser: Parser, opts: Partial<BotOptions> = {}): Bot {
-  const bot = new Bot(env.handle.db, env.adapter, parser, env.service, env.clock, silentLogger, {
+  const bot = new Bot(env.handle.db, env.adapter, parser, env.service, env.digests, env.clock, silentLogger, {
     platform: 'test',
     botName: 'Ranti',
     defaultTimezone: 'Africa/Lagos',

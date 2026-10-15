@@ -8,6 +8,12 @@ export interface OccurrenceDispatcher {
   dispatch(occurrenceId: number): Promise<unknown>;
 }
 
+/** The weekly digest's share of recovery (see DigestService). */
+export interface DigestRecovery {
+  ensureScheduled(): Promise<number>;
+  sweepDue(): Promise<number>;
+}
+
 /**
  * Missed-job recovery and the safety-net sweeper. The database is the source of truth:
  * anything pending and due is delivered (or skipped if too late) regardless of the job queue.
@@ -22,11 +28,12 @@ export class Recovery {
     private readonly dispatcher: OccurrenceDispatcher,
     private readonly clock: Clock,
     private readonly logger: Logger,
+    private readonly digests?: DigestRecovery,
   ) {}
 
   /** On startup: re-enqueue future occurrences and deliver/skip anything that was missed. */
   async runStartup(): Promise<{ requeued: number; due: number }> {
-    const requeued = await this.scheduler.requeueFuture(this.db);
+    const requeued = (await this.scheduler.requeueFuture(this.db)) + ((await this.digests?.ensureScheduled()) ?? 0);
     const due = await this.sweepDue();
     this.logger.info({ requeued, due }, 'Startup recovery complete');
     return { requeued, due };
@@ -48,8 +55,10 @@ export class Recovery {
           this.logger.warn({ err, occurrenceId: occ.id }, 'Sweeper dispatch failed');
         }
       }
+      // Digests: under 6 hours late is sent, older is skipped and next week scheduled.
+      const digests = (await this.digests?.sweepDue()) ?? 0;
       await deleteExpiredInteractions(this.db, this.clock.now());
-      return due.length;
+      return due.length + digests;
     } finally {
       this.sweeping = false;
     }

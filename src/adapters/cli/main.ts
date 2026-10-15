@@ -21,6 +21,7 @@ const showClock = registerClockCommands(adapter, {
   db: app.handle.db,
   clock,
   dispatcher: app.dispatcher,
+  digests: app.digests,
   timezone: config.DEFAULT_TIMEZONE,
   isShifted: () => clock.isShifted,
 });

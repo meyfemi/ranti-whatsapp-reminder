@@ -75,6 +75,14 @@ const LinkBirthday = z.object({
   user_id: z.string().describe('ID of the mentioned member to link the birthday to'),
 });
 
+const SetDigest = z.object({
+  action: z.literal('set_digest'),
+  enabled: z.enum(['on', 'off']).nullable().describe('on/off if the user turns the digest on or off; null if they only change the day or time'),
+  weekday: z.enum(['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']).nullable().describe('Day to send it on, if given'),
+  time: z.string().nullable().describe('Local time to send it at, 24-hour HH:mm, if given'),
+  empty_weeks: z.enum(['post', 'skip']).nullable().describe('Whether to post "nothing scheduled" in an empty week, if the user says'),
+});
+
 export const CommandSchema = z.discriminatedUnion('action', [
   CreateCommand,
   z.object({ action: z.literal('list') }),
@@ -86,6 +94,8 @@ export const CommandSchema = z.discriminatedUnion('action', [
   BulkAddBirthdays,
   LinkBirthday,
   z.object({ action: z.literal('set_date_format'), format: z.enum(['DMY', 'MDY']) }),
+  SetDigest,
+  z.object({ action: z.literal('show_upcoming') }),
   z.object({ action: z.literal('help') }),
   z.object({ action: z.literal('clarify'), question: z.string() }),
   z.object({ action: z.literal('unsupported'), reason: z.string() }),
@@ -101,6 +111,7 @@ export type QueryParsed = Extract<ParsedCommand, { action: 'query' }>;
 export type CancelParsed = Extract<ParsedCommand, { action: 'cancel' }>;
 export type BulkParsed = Extract<ParsedCommand, { action: 'bulk_add_birthdays' }>;
 export type LinkParsed = Extract<ParsedCommand, { action: 'link_birthday' }>;
+export type SetDigestParsed = Extract<ParsedCommand, { action: 'set_digest' }>;
 export type ReminderTarget = z.infer<typeof Target>;
 
 export interface ValidationContext {
@@ -185,6 +196,11 @@ function domainSchema(ctx: ValidationContext) {
       user_id: z.string().refine((id) => mentioned.has(id), 'user must be one of the mentioned users'),
     }),
     z.object({ action: z.literal('set_date_format'), format: z.enum(['DMY', 'MDY']) }),
+    SetDigest.extend({ time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable() }).refine(
+      (d) => d.enabled !== null || d.weekday !== null || d.time !== null || d.empty_weeks !== null,
+      'nothing to change',
+    ),
+    z.object({ action: z.literal('show_upcoming') }),
     z.object({ action: z.literal('help') }),
     z.object({ action: z.literal('clarify'), question: z.string().trim().min(1).max(300) }),
     z.object({ action: z.literal('unsupported'), reason: z.string().trim().min(1).max(300) }),
@@ -214,6 +230,8 @@ export function validateCommand(raw: unknown, ctx: ValidationContext): Validatio
     question = 'Who is this reminder for? Please @mention them.';
   } else if (issues.some((i) => i.startsWith('timezone'))) {
     question = "I don't recognise that timezone. Could you give it like Europe/London or Africa/Lagos?";
+  } else if (action === 'set_digest') {
+    question = 'Which day and time should the weekly digest go out? E.g. "Sundays at 7pm".';
   } else if (action === 'query') {
     question = 'Which reminder or which dates do you mean?';
   } else if (action === 'cancel' || action === 'edit') {

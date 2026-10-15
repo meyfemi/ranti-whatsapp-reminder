@@ -1,5 +1,6 @@
 import { DateTime } from 'luxon';
-import type { Reminder } from '../db/schema.js';
+import type { Group, Reminder } from '../db/schema.js';
+import { describeSchedule } from '../digest/upcoming.js';
 import { describeOffsets, describeWhen, formatDay, formatTime, sanitizeText, tzAbbrev } from '../reminders/format.js';
 import type { UpcomingEvent } from '../reminders/query.js';
 import { toIsoLocal } from '../scheduler/scheduler.js';
@@ -20,6 +21,7 @@ export function introText(botName: string, timezone: string, now: Date): string 
     `• ${at} every first Saturday remind us to pay dues at 9am`,
     `• ${at} what reminders do we have?`,
     `Cancel with "${at} cancel #2". Times are in ${tzLabel(timezone, now)}; change it with "${at} set timezone to Europe/London".`,
+    `Admins can turn on a weekly summary: "${at} turn on the weekly digest".`,
   ].join('\n');
 }
 
@@ -34,9 +36,10 @@ export function helpText(botName: string, timezone: string, now: Date): string {
     `• Repeat: "${at} every Monday at 6am remind us to send reports"`,
     `• List: "${at} what reminders do we have?"`,
     `• Ask: "${at} anything on this week?" · "${at} when is my birthday?"`,
+    `• Coming up: "${at} what's coming up this week?"`,
     `• Change: "${at} move #3 to 5pm" · Cancel: "${at} cancel #3"`,
     `• Reply "undo" to my confirmation within ${UNDO_MINUTES} minutes to undo it.`,
-    `Admins: "${at} only admins can set reminders" · "${at} we write dates month first". Timezone: ${tzLabel(timezone, now)}; change with "${at} set timezone to Europe/London".`,
+    `Admins: "${at} only admins can set reminders" · "${at} we write dates month first" · "${at} turn on the weekly digest" (or "send the digest on Sundays at 7pm"). Timezone: ${tzLabel(timezone, now)}; change with "${at} set timezone to Europe/London".`,
   ].join('\n');
 }
 
@@ -129,4 +132,12 @@ export function noMatchText(kind: Reminder['kind'] | null, subject: 'you' | 'the
   const what = kindNoun(kind, false);
   if (subject) return `I don't have ${/^[aeiou]/.test(what) ? 'an' : 'a'} ${what} saved for ${subject}.`;
   return `I couldn't find a matching ${what}.`;
+}
+
+/** Echo after changing the weekly digest. */
+export function digestConfirmation(group: Group, next: DateTime | null, botName: string): string {
+  if (!group.digestEnabled) return `Weekly digest is off. Turn it back on with "@${botName} turn on the weekly digest".`;
+  const nextText = next ? ` Next one: ${formatDay(next)}.` : '';
+  const empty = group.digestPostEmpty ? ' In a week with nothing on, I\'ll say so.' : '';
+  return `Weekly digest is on: ${describeSchedule(group)}.${nextText}${empty}`;
 }
