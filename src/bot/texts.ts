@@ -22,7 +22,7 @@ export function introText(botName: string, timezone: string, now: Date): string 
     `• ${at} what reminders do we have?`,
     `Cancel with "${at} cancel #2". Times are in ${tzLabel(timezone, now)}; change it with "${at} set timezone to Europe/London".`,
     `Each Monday I'll post the week ahead; admins can stop it with "${at} turn off the weekly digest".`,
-  ].join('\n');
+  ].join('\n\n');
 }
 
 export function helpText(botName: string, timezone: string, now: Date): string {
@@ -39,8 +39,13 @@ export function helpText(botName: string, timezone: string, now: Date): string {
     `• Coming up: "${at} what's coming up this week?"`,
     `• Change: "${at} move #3 to 5pm" · Cancel: "${at} cancel #3"`,
     `• Reply "undo" to my confirmation within ${UNDO_MINUTES} minutes to undo it.`,
-    `Admins: "${at} only admins can set reminders" · "${at} we write dates month first" · "${at} turn off the weekly digest" (or "send the digest on Sundays at 7pm"). Timezone: ${tzLabel(timezone, now)}; change with "${at} set timezone to Europe/London".`,
-  ].join('\n');
+    `Admins: "${at} only admins can set reminders"`,
+    `"${at} we write dates month first"`,
+    `"${at} turn off the weekly digest"`,
+    `or "send the digest on Sundays at 7pm".`,
+    `Timezone: ${tzLabel(timezone, now)};`,
+    `change with "${at} set timezone to Europe/London".`,
+  ].join('\n\n');
 }
 
 type Schedulable = Pick<Reminder, 'startLocal' | 'rrule' | 'timezone' | 'offsetsMinutes' | 'title' | 'shortId' | 'kind'>;
@@ -48,7 +53,7 @@ type Schedulable = Pick<Reminder, 'startLocal' | 'rrule' | 'timezone' | 'offsets
 function scheduleDetails(r: Schedulable, nextEvent: Date | null): string {
   const sched = { startLocal: toIsoLocal(r.startLocal), rrule: r.rrule, timezone: r.timezone, offsetsMinutes: r.offsetsMinutes };
   const parts = [`${sanitizeText(r.title)} (#${r.shortId}), ${describeWhen(sched)}.`];
-  if (r.rrule && nextEvent) parts.push(`Next: ${formatDay(DateTime.fromJSDate(nextEvent).setZone(r.timezone))}.`);
+  if (r.rrule && nextEvent) parts.push(`\n\nNext: ${formatDay(DateTime.fromJSDate(nextEvent).setZone(r.timezone))}.`);
   const onlyAtTime = r.offsetsMinutes.length === 1 && r.offsetsMinutes[0] === 0;
   if (!onlyAtTime || !r.rrule) {
     if (!(r.kind === 'birthday' || r.kind === 'anniversary') || !onlyAtTime) parts.push(describeOffsets(sched));
@@ -63,15 +68,15 @@ export function createdConfirmation(r: Schedulable, nextEvent: Date | null, subj
       : r.kind === 'anniversary'
         ? ` I'll post anniversary wishes here.`
         : '';
-  return `Got it: ${scheduleDetails(r, nextEvent)}${greeting} Reply "undo" within ${UNDO_MINUTES} minutes to cancel.`;
+  return `Got it: ${scheduleDetails(r, nextEvent)}${greeting} \n\nReply "undo" within ${UNDO_MINUTES} minutes to cancel.`;
 }
 
 export function editedConfirmation(r: Schedulable, nextEvent: Date | null): string {
-  return `Updated: ${scheduleDetails(r, nextEvent)} Reply "undo" within ${UNDO_MINUTES} minutes to revert.`;
+  return `Updated: ${scheduleDetails(r, nextEvent)} \n\nReply "undo" within ${UNDO_MINUTES} minutes to revert.`;
 }
 
 export function cancelledConfirmation(r: Pick<Reminder, 'title' | 'shortId'>): string {
-  return `Cancelled #${r.shortId} ${sanitizeText(r.title)}. Reply "undo" within ${UNDO_MINUTES} minutes to restore it.`;
+  return `Cancelled #${r.shortId} ${sanitizeText(r.title)}. \n\nReply "undo" within ${UNDO_MINUTES} minutes to restore it.`;
 }
 
 export const UNAVAILABLE_TEXT = "Sorry, I can't process requests right now. Please try again in a few minutes.";
